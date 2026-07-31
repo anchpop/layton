@@ -91,9 +91,6 @@ export function Library({ userId, email }: { userId: string; email: string }) {
           <p style={{ fontFamily: "var(--font-prose)", fontSize: "1.05rem" }}>
             Nothing written yet.
           </p>
-          <p className="mt-1 text-sm" style={{ color: "var(--ink-muted)" }}>
-            Start a book and it will follow you to every device.
-          </p>
         </div>
       ) : (
         <ul className="mt-4">

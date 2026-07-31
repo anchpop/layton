@@ -85,8 +85,12 @@ body {
   line-height: 1.75;
   color: var(--ink);
   outline: none;
-  /* A comfortable measure. Prose wider than this is tiring to read. */
-  max-width: 34rem;
+  /* The measure — about 66 characters, the comfortable range for prose.
+     content-box matters here: Tailwind's preflight sets border-box globally,
+     which would make max-width include the padding and quietly shave 3rem
+     (roughly twelve characters) off every line. */
+  box-sizing: content-box;
+  max-width: 38rem;
   margin: 0 auto;
   padding: 4rem 1.5rem 45vh 1.5rem;
   min-height: 100%;
