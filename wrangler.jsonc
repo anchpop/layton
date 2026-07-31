@@ -4,7 +4,7 @@
   "compatibility_date": "2026-07-30",
   // Canonical origin. Passkeys are pinned to a single WebAuthn rp_id, so this
   // host is the one that can sign you in with Face ID / Touch ID.
-  "routes": [{ "pattern": "layton.chadnauseam.com", "custom_domain": true }],
+  "routes": [{ "pattern": "layton.space", "custom_domain": true }],
   "assets": {
     // The whole app is a static SPA talking directly to Supabase, so there is
     // no Worker script here — Cloudflare just serves the build and routes every

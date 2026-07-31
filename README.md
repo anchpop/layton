@@ -4,7 +4,7 @@ A quiet, offline-first place to write fiction. Your work syncs to your account
 across every device, merges without conflicts, and keeps working when the
 network doesn't.
 
-**Live:** https://layton.chadnauseam.com
+**Live:** https://layton.space
 
 ---
 
@@ -102,7 +102,7 @@ app uses from then on. Supabase issues discoverable credentials
 device prompt.
 
 WebAuthn binds a credential to one `rp_id`, which must match the origin's host.
-That pins passkeys to a single canonical domain (`layton.chadnauseam.com`) and
+That pins passkeys to a single canonical domain (`layton.space`) and
 is why the `workers.dev` route is switched off: two origins would mean passkeys
 that silently fail on one of them.
 
