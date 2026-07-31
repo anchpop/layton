@@ -1,0 +1,9 @@
+node_modules
+dist
+.env.local
+.env*.local
+.supabase-db-password.txt
+.wrangler
+.DS_Store
+*.tsbuildinfo
+supabase/.temp

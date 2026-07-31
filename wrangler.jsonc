@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "layton",
+  "compatibility_date": "2026-07-30",
+  "assets": {
+    // The whole app is a static SPA talking directly to Supabase, so there is
+    // no Worker script here — Cloudflare just serves the build and routes every
+    // unknown path back to index.html for client-side routing.
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  },
+  "observability": {
+    "enabled": true
+  }
+}
