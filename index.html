@@ -31,13 +31,16 @@
     />
     <title>Layton</title>
     <script>
-      // Apply the saved theme before first paint, so opening a book at night
-      // never flashes a bright background.
+      // Resolve the theme to a `.dark` class before first paint. shadcn keys
+      // every dark: utility off that class, so "system" has to become a
+      // concrete class here rather than being left to a media query.
       try {
         var t = localStorage.getItem("layton:theme");
-        if (t === "light" || t === "dark") {
-          document.documentElement.setAttribute("data-theme", t);
-        }
+        var dark =
+          t === "dark" ||
+          (t !== "light" &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches);
+        if (dark) document.documentElement.classList.add("dark");
       } catch (e) {}
     </script>
   </head>

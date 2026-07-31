@@ -1,5 +1,7 @@
 import { Component, type ReactNode } from "react";
 
+import { Button } from "@/components/ui/button";
+
 /**
  * Recovers from a stale deploy.
  *
@@ -49,24 +51,22 @@ export class ChunkBoundary extends Component<Props, State> {
       return (
         <div className="flex h-full items-center justify-center px-6">
           <div className="text-center">
-            <p style={{ fontFamily: "var(--font-prose)", fontSize: "1.05rem" }}>
+            <p className="font-prose text-lg">
               Something went wrong loading the editor.
             </p>
-            <p className="mt-1 text-sm" style={{ color: "var(--ink-muted)" }}>
+            <p className="mt-1 text-sm text-muted-foreground">
               Your writing is safe — it is stored on this device and in your
               account.
             </p>
-            <button
-              type="button"
-              className="mt-4 rounded-md px-3 py-1.5 text-sm font-medium"
-              style={{ background: "var(--ink)", color: "var(--paper)" }}
+            <Button
+              className="mt-4"
               onClick={() => {
                 sessionStorage.removeItem(RELOAD_FLAG);
                 window.location.reload();
               }}
             >
               Reload
-            </button>
+            </Button>
           </div>
         </div>
       );

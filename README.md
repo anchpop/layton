@@ -17,6 +17,8 @@ network doesn't.
   breaks (`***` on an empty line), first-paragraph indent suppression.
 - **Focus mode** (`⌘.`) fades the interface away. `⌘\` toggles the sidebar.
 - **Light and dark**, following the system by default.
+- **Works on a phone.** The chapter panel becomes a drawer; the writing surface
+  gets the whole screen.
 - **Installable.** Add it to your home screen or dock and it works with no
   network at all — the app shell, the editor, and the CRDT engine are all
   precached.
@@ -137,6 +139,29 @@ Supabase calls are pinned to `NetworkOnly`. A stale cached API response would
 be worse than a clean failure, because sync already knows how to handle
 failure.
 
+## Interface
+
+Built on [shadcn/ui](https://ui.shadcn.com) (Radix under the hood). Two things
+were adapted rather than taken as-is:
+
+**The palette.** shadcn ships a neutral grey scale. Layton's tokens are
+remapped to the warm paper palette in `src/index.css`, so every component —
+sidebar, dialogs, toasts — inherits it. shadcn's token names are the single
+source of truth for chrome; a couple of prose-only tokens (`--prose-faint`,
+`--selection`) sit alongside them for the writing surface.
+
+**The sidebar shortcut.** shadcn's sidebar binds ⌘B, which is bold in the
+editor. It is rebound to ⌘\ in `components/ui/sidebar.tsx` — a writer reaching
+for emphasis should never get a sliding panel instead.
+
+Theme switching uses shadcn's `.dark` class rather than a media query, so
+"system" is resolved to a concrete class in `ThemeToggle` and again in a
+pre-paint script in `index.html` (no flash of the wrong background at night).
+
+On a phone the sidebar renders as a drawer and closes itself when you pick a
+chapter. The measure is fluid below 640px — what matters on a small screen is
+that the text is not fighting the edges.
+
 ## Local development
 
 ```bash
@@ -200,5 +225,6 @@ src/
                    and CRDT-to-React subscriptions
   components/      Auth, PasskeySetup, PasskeyPanel, Library, BookView,
                    ChapterList, Editor, UpdatePrompt
+    ui/            shadcn components (owned, edited in place)
 supabase/migrations/
 ```

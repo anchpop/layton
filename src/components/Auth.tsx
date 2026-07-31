@@ -1,12 +1,17 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { Fingerprint, Mail } from "lucide-react";
 
-import { supabase } from "../lib/supabase";
+import { supabase } from "@/lib/supabase";
 import {
   deviceHasPasskeyHint,
   isPasskeySupported,
   signInWithPasskey,
-} from "../lib/passkey";
-import { isStandalone } from "../lib/pwa";
+} from "@/lib/passkey";
+import { isStandalone } from "@/lib/pwa";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
 
 export function Auth() {
   const [email, setEmail] = useState("");
@@ -22,7 +27,7 @@ export function Auth() {
 
   // Inside an installed app, email is a dead end on iOS: the link opens in the
   // browser and the session never reaches this context. Lead with the passkey
-  // and keep email tucked behind a disclosure.
+  // and keep email behind a disclosure.
   useEffect(() => {
     if (!passkeySupported || (!knownDevice && !installed)) setShowEmail(true);
   }, [passkeySupported, knownDevice, installed]);
@@ -45,9 +50,7 @@ export function Auth() {
     setError(null);
     try {
       const ok = await signInWithPasskey();
-      // `false` means the sheet was dismissed — say nothing.
-      if (!ok) setPasskeyBusy(false);
-      // On success the auth listener swaps this screen out.
+      if (!ok) setPasskeyBusy(false); // dismissed the sheet — say nothing
     } catch (err) {
       setPasskeyBusy(false);
       setError(
@@ -59,28 +62,20 @@ export function Auth() {
   }
 
   return (
-    <div className="flex min-h-full items-center justify-center px-6">
+    <div className="flex min-h-full items-center justify-center px-5 py-12">
       <div className="w-full max-w-sm">
-        <h1
-          className="text-3xl tracking-tight"
-          style={{ fontFamily: "var(--font-prose)" }}
-        >
-          Layton
-        </h1>
-        <p className="mt-2 text-sm" style={{ color: "var(--ink-muted)" }}>
+        <h1 className="font-prose text-3xl tracking-tight">Layton</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
           A quiet place to write, on every device you own.
         </p>
 
         {sent ? (
-          <div
-            className="mt-8 rounded-lg border p-4 text-sm"
-            style={{ borderColor: "var(--rule)", color: "var(--ink-muted)" }}
-          >
-            <p style={{ color: "var(--ink)" }}>Check your email.</p>
+          <div className="mt-8 rounded-lg border p-4 text-sm text-muted-foreground">
+            <p className="text-foreground">Check your email.</p>
             <p className="mt-1">
               We sent a sign-in link to{" "}
-              <span style={{ color: "var(--ink)" }}>{email}</span>. Open it on
-              this device to continue.
+              <span className="text-foreground">{email}</span>. Open it on this
+              device to continue.
             </p>
             {installed && (
               <p className="mt-2">
@@ -89,102 +84,78 @@ export function Auth() {
                 app signs you in directly.
               </p>
             )}
-            <button
-              type="button"
-              className="mt-3 underline underline-offset-4"
+            <Button
+              variant="link"
+              className="mt-2 h-auto p-0"
               onClick={() => setSent(false)}
             >
               Use a different address
-            </button>
+            </Button>
           </div>
         ) : (
           <div className="mt-8">
             {passkeySupported && (
               <>
-                <button
-                  type="button"
-                  onClick={() => void onPasskey()}
+                <Button
+                  className="w-full"
                   disabled={passkeyBusy}
-                  className="w-full rounded-md px-3 py-2 text-sm font-medium transition disabled:opacity-40"
-                  style={{ background: "var(--ink)", color: "var(--paper)" }}
+                  onClick={() => void onPasskey()}
                 >
+                  <Fingerprint className="size-4" />
                   {passkeyBusy ? "Waiting…" : "Sign in with a passkey"}
-                </button>
-                <p
-                  className="mt-2 text-xs"
-                  style={{ color: "var(--ink-faint)" }}
-                >
+                </Button>
+                <p className="mt-2 text-xs text-muted-foreground">
                   Uses Face ID, Touch ID, or your device lock.
                 </p>
               </>
             )}
 
             {passkeySupported && !showEmail && (
-              <button
-                type="button"
+              <Button
+                variant="link"
+                className="mt-4 h-auto p-0 text-xs text-muted-foreground"
                 onClick={() => setShowEmail(true)}
-                className="mt-5 text-xs underline underline-offset-4"
-                style={{ color: "var(--ink-muted)" }}
               >
                 First time here? Sign in with email
-              </button>
+              </Button>
             )}
 
             {showEmail && (
-              <form
-                onSubmit={onEmailSubmit}
-                className={passkeySupported ? "mt-6 border-t pt-6" : ""}
-                style={
-                  passkeySupported ? { borderColor: "var(--rule)" } : undefined
-                }
-              >
-                <label
+              <form onSubmit={onEmailSubmit}>
+                {passkeySupported && <Separator className="my-6" />}
+                <Label
                   htmlFor="email"
-                  className="block text-xs uppercase tracking-widest"
-                  style={{ color: "var(--ink-faint)" }}
+                  className="text-xs uppercase tracking-widest text-muted-foreground"
                 >
                   Email
-                </label>
-                <input
+                </Label>
+                <Input
                   id="email"
                   type="email"
                   required
                   autoComplete="email"
+                  inputMode="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="you@example.com"
-                  className="mt-2 w-full rounded-md border bg-transparent px-3 py-2 text-sm outline-none focus:border-current"
-                  style={{ borderColor: "var(--rule)", color: "var(--ink)" }}
+                  className="mt-2"
                 />
-                <button
+                <Button
                   type="submit"
+                  variant={passkeySupported ? "outline" : "default"}
+                  className="mt-3 w-full"
                   disabled={busy || email.trim().length === 0}
-                  className="mt-3 w-full rounded-md border px-3 py-2 text-sm font-medium transition disabled:opacity-40"
-                  style={{
-                    borderColor: "var(--rule)",
-                    color: "var(--ink)",
-                    background: passkeySupported
-                      ? "transparent"
-                      : "var(--ink)",
-                    ...(passkeySupported ? {} : { color: "var(--paper)" }),
-                  }}
                 >
+                  <Mail className="size-4" />
                   {busy ? "Sending…" : "Send sign-in link"}
-                </button>
-                <p
-                  className="mt-3 text-xs"
-                  style={{ color: "var(--ink-faint)" }}
-                >
+                </Button>
+                <p className="mt-3 text-xs text-muted-foreground">
                   No password. We email you a link that signs you in.
                 </p>
               </form>
             )}
 
-            {error && (
-              <p className="mt-4 text-sm" style={{ color: "#b4483c" }}>
-                {error}
-              </p>
-            )}
+            {error && <p className="mt-4 text-sm text-destructive">{error}</p>}
           </div>
         )}
       </div>

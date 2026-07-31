@@ -1,3 +1,4 @@
+import path from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
@@ -13,7 +14,9 @@ export default defineConfig({
       registerType: "prompt",
       injectRegister: null,
       workbox: {
-        globPatterns: ["**/*.{js,css,html,svg,png,ico,webmanifest,wasm}"],
+        globPatterns: [
+          "**/*.{js,css,html,svg,png,ico,webmanifest,wasm,woff,woff2}",
+        ],
         // Loro's wasm is ~3 MB, well over Workbox's 2 MiB default. Without
         // this it is silently dropped from the precache and the editor cannot
         // open offline — which is the entire point of the app.
@@ -53,6 +56,9 @@ export default defineConfig({
       devOptions: { enabled: false },
     }),
   ],
+  resolve: {
+    alias: { "@": path.resolve(__dirname, "./src") },
+  },
   build: {
     target: "es2022",
   },

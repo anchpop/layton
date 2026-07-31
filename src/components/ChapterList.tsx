@@ -1,14 +1,56 @@
 import { useEffect, useRef, useState } from "react";
+import {
+  ArrowDown,
+  ArrowUp,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+  Trash2,
+} from "lucide-react";
 import type { LoroDoc } from "loro-crdt";
 
-import type { ChapterIndexEntry } from "../lib/book";
-import { addChapter, deleteChapter, moveChapter, renameChapter } from "../lib/book";
+import type { ChapterIndexEntry } from "@/lib/book";
+import {
+  addChapter,
+  deleteChapter,
+  moveChapter,
+  renameChapter,
+} from "@/lib/book";
+import {
+  SidebarGroup,
+  SidebarGroupAction,
+  SidebarGroupLabel,
+  SidebarMenu,
+  SidebarMenuAction,
+  SidebarMenuButton,
+  SidebarMenuItem,
+} from "@/components/ui/sidebar";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { cn } from "@/lib/utils";
 
 type Props = {
   doc: LoroDoc;
   chapters: ChapterIndexEntry[];
   activeId: string | null;
-  onSelect: (id: string) => void;
+  /** `closePanel: false` keeps the mobile drawer open — used when creating a
+   *  chapter, because the rename field lives inside that drawer. */
+  onSelect: (id: string, opts?: { closePanel?: boolean }) => void;
 };
 
 export function ChapterList({ doc, chapters, activeId, onSelect }: Props) {
@@ -16,13 +58,29 @@ export function ChapterList({ doc, chapters, activeId, onSelect }: Props) {
   const [draft, setDraft] = useState("");
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [overIndex, setOverIndex] = useState<number | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<ChapterIndexEntry | null>(
+    null,
+  );
   const inputRef = useRef<HTMLInputElement | null>(null);
+  // Same reason as the book title: Escape has to survive a synchronous blur.
+  const renameCancelled = useRef(false);
 
   useEffect(() => {
     if (editingId) inputRef.current?.select();
   }, [editingId]);
 
+  function startRename(chapter: ChapterIndexEntry) {
+    renameCancelled.current = false;
+    setEditingId(chapter.id);
+    setDraft(chapter.title);
+  }
+
   function commitRename() {
+    if (renameCancelled.current) {
+      renameCancelled.current = false;
+      setEditingId(null);
+      return;
+    }
     if (!editingId) return;
     renameChapter(doc, editingId, draft.trim());
     setEditingId(null);
@@ -37,36 +95,29 @@ export function ChapterList({ doc, chapters, activeId, onSelect }: Props) {
   }
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between px-4 pb-2 pt-1">
-        <span
-          className="text-[0.65rem] uppercase tracking-widest"
-          style={{ color: "var(--ink-faint)" }}
-        >
-          Chapters
-        </span>
-        <button
-          type="button"
-          title="New chapter"
-          className="text-lg leading-none"
-          style={{ color: "var(--ink-faint)" }}
-          onClick={() => {
-            const created = addChapter(doc, "");
-            onSelect(created.id);
-            setEditingId(created.id);
-            setDraft("");
-          }}
-        >
-          +
-        </button>
-      </div>
+    <SidebarGroup>
+      <SidebarGroupLabel>Chapters</SidebarGroupLabel>
+      <SidebarGroupAction
+        title="New chapter"
+        onClick={() => {
+          const created = addChapter(doc, "");
+          onSelect(created.id, { closePanel: false });
+          renameCancelled.current = false;
+          setEditingId(created.id);
+          setDraft("");
+        }}
+      >
+        <Plus />
+        <span className="sr-only">New chapter</span>
+      </SidebarGroupAction>
 
-      <ol className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+      <SidebarMenu>
         {chapters.map((chapter, index) => {
           const isActive = chapter.id === activeId;
           const isOver = overIndex === index && dragIndex !== index;
+
           return (
-            <li
+            <SidebarMenuItem
               key={chapter.id}
               draggable={editingId !== chapter.id}
               onDragStart={() => setDragIndex(index)}
@@ -83,12 +134,11 @@ export function ChapterList({ doc, chapters, activeId, onSelect }: Props) {
                 setDragIndex(null);
                 setOverIndex(null);
               }}
-              className="group relative rounded-md"
-              style={{
-                background: isActive ? "var(--paper-raised)" : "transparent",
-                boxShadow: isOver ? "inset 0 2px 0 0 var(--accent)" : undefined,
-                opacity: dragIndex === index ? 0.4 : 1,
-              }}
+              className={cn(
+                "rounded-md",
+                isOver && "shadow-[inset_0_2px_0_0_var(--sidebar-ring)]",
+                dragIndex === index && "opacity-40",
+              )}
             >
               {editingId === chapter.id ? (
                 <input
@@ -98,66 +148,117 @@ export function ChapterList({ doc, chapters, activeId, onSelect }: Props) {
                   onChange={(e) => setDraft(e.target.value)}
                   onBlur={commitRename}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") commitRename();
-                    if (e.key === "Escape") setEditingId(null);
+                    if (e.key === "Enter") e.currentTarget.blur();
+                    if (e.key === "Escape") {
+                      renameCancelled.current = true;
+                      e.currentTarget.blur();
+                    }
                   }}
                   placeholder={`Chapter ${index + 1}`}
-                  className="w-full bg-transparent px-2 py-1.5 text-sm outline-none"
-                  style={{ color: "var(--ink)" }}
+                  className="h-8 w-full rounded-md bg-transparent px-2 text-base outline-none ring-1 ring-sidebar-ring can-hover:text-sm"
                 />
               ) : (
-                <div className="flex items-center">
-                  <button
-                    type="button"
-                    className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-sm"
-                    style={{
-                      color: isActive ? "var(--ink)" : "var(--ink-muted)",
-                    }}
+                <>
+                  <SidebarMenuButton
+                    isActive={isActive}
                     onClick={() => onSelect(chapter.id)}
-                    onDoubleClick={() => {
-                      setEditingId(chapter.id);
-                      setDraft(chapter.title);
-                    }}
+                    onDoubleClick={() => startRename(chapter)}
                   >
-                    <span
-                      className="mr-2 tabular-nums"
-                      style={{ color: "var(--ink-faint)" }}
-                    >
+                    <span className="tabular-nums text-prose-faint">
                       {index + 1}.
                     </span>
-                    {chapter.title || (
-                      <span style={{ color: "var(--ink-faint)" }}>Untitled</span>
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    title="Delete chapter"
-                    className="mr-1 shrink-0 px-1.5 text-xs opacity-0 transition group-hover:opacity-100 focus:opacity-100"
-                    style={{ color: "var(--ink-faint)" }}
-                    onClick={() => {
-                      if (
-                        window.confirm(
-                          `Delete "${chapter.title || "Untitled"}"? This cannot be undone.`,
-                        )
-                      ) {
-                        deleteChapter(doc, chapter.id);
-                      }
-                    }}
-                  >
-                    ✕
-                  </button>
-                </div>
+                    <span className="truncate">
+                      {chapter.title || (
+                        <span className="text-prose-faint">Untitled</span>
+                      )}
+                    </span>
+                  </SidebarMenuButton>
+
+                  {/* Every chapter action lives here, not only behind a
+                      double-click. On a phone the first tap opens the chapter
+                      and closes the drawer, so a second click never arrives —
+                      and dragging to reorder is unavailable on touch and to
+                      keyboard users besides. */}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <SidebarMenuAction
+                        showOnHover
+                        title={`Actions for ${chapter.title || "this chapter"}`}
+                      >
+                        <MoreHorizontal />
+                        <span className="sr-only">Chapter actions</span>
+                      </SidebarMenuAction>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent side="right" align="start">
+                      <DropdownMenuItem onSelect={() => startRename(chapter)}>
+                        <Pencil className="size-4" />
+                        Rename
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        disabled={index === 0}
+                        onSelect={() => moveChapter(doc, index, index - 1)}
+                      >
+                        <ArrowUp className="size-4" />
+                        Move up
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        disabled={index === chapters.length - 1}
+                        onSelect={() => moveChapter(doc, index, index + 1)}
+                      >
+                        <ArrowDown className="size-4" />
+                        Move down
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        variant="destructive"
+                        onSelect={() => setPendingDelete(chapter)}
+                      >
+                        <Trash2 className="size-4" />
+                        Delete
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </>
               )}
-            </li>
+            </SidebarMenuItem>
           );
         })}
 
         {chapters.length === 0 && (
-          <li className="px-2 py-3 text-sm" style={{ color: "var(--ink-faint)" }}>
+          <li className="px-2 py-3 text-sm text-muted-foreground">
             No chapters yet.
           </li>
         )}
-      </ol>
-    </div>
+      </SidebarMenu>
+
+      <AlertDialog
+        open={pendingDelete != null}
+        onOpenChange={(open) => !open && setPendingDelete(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete “{pendingDelete?.title || "Untitled"}”?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes the chapter and everything written in it, on every
+              device. It cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep it</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (pendingDelete) deleteChapter(doc, pendingDelete.id);
+                setPendingDelete(null);
+              }}
+            >
+              Delete chapter
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </SidebarGroup>
   );
 }

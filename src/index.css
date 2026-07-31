@@ -1,74 +1,177 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
 
 /*
  * Layton — a quiet place to write.
  *
- * The palette is warm paper rather than pure white: long writing sessions are
- * easier on a slightly cream ground, and the dark theme is a true dark rather
- * than an inverted grey so it works at night.
+ * The palette is warm paper rather than pure white: long sessions are easier on
+ * a slightly cream ground, and the dark theme is a true dark rather than an
+ * inverted grey so it works at night.
+ *
+ * shadcn's token names are the single source of truth for chrome, so every
+ * component inherits this palette instead of the default neutral grey. A few
+ * prose-only tokens live alongside them for the writing surface itself.
  */
 
-@theme {
-  --font-prose: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia,
-    "Times New Roman", serif;
-  --font-ui: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    Roboto, sans-serif;
-}
+@custom-variant dark (&:is(.dark *), &.dark);
+/* Reveal-on-hover is only ever safe where a pointer exists. Keying it to a
+   width breakpoint hid chapter and delete actions outright on a landscape
+   phone, which is wider than 768px and cannot hover. */
+@custom-variant can-hover (@media (hover: hover) and (pointer: fine));
 
 :root {
-  --paper: #fbfaf7;
-  --paper-raised: #ffffff;
-  --ink: #1c1a17;
-  --ink-muted: #6b665e;
-  --ink-faint: #9c968c;
-  --rule: #e6e2da;
-  --accent: #8a6f4e;
+  --background: #fbfaf7;
+  --foreground: #1c1a17;
+
+  --card: #ffffff;
+  --card-foreground: #1c1a17;
+  --popover: #ffffff;
+  --popover-foreground: #1c1a17;
+
+  --primary: #1c1a17;
+  --primary-foreground: #fbfaf7;
+  --secondary: #f0ece3;
+  --secondary-foreground: #1c1a17;
+
+  --muted: #f0ece3;
+  --muted-foreground: #6b665e;
+  --accent: #ebe5d9;
+  --accent-foreground: #1c1a17;
+
+  --destructive: #b4483c;
+  --destructive-foreground: #fbfaf7;
+
+  --border: #e6e2da;
+  --input: #e6e2da;
+  --ring: #8a6f4e;
+
+  --sidebar: #f6f3ed;
+  --sidebar-foreground: #1c1a17;
+  --sidebar-primary: #1c1a17;
+  --sidebar-primary-foreground: #fbfaf7;
+  --sidebar-accent: #ebe5d9;
+  --sidebar-accent-foreground: #1c1a17;
+  --sidebar-border: #e6e2da;
+  --sidebar-ring: #8a6f4e;
+
+  /* Prose-only. `--prose-faint` is deliberately lighter than muted-foreground:
+     it is for marginal furniture (chapter numbers, scene breaks) that should
+     recede behind the text. */
+  --prose-faint: #9c968c;
   --selection: #e9dcc6;
+
+  --radius: 0.5rem;
   color-scheme: light;
 }
 
-:root[data-theme="dark"] {
-  --paper: #14130f;
-  --paper-raised: #1b1a16;
-  --ink: #e8e4dc;
-  --ink-muted: #9a948a;
-  --ink-faint: #6a655c;
-  --rule: #2b2924;
-  --accent: #c2a578;
+.dark {
+  --background: #14130f;
+  --foreground: #e8e4dc;
+
+  --card: #1b1a16;
+  --card-foreground: #e8e4dc;
+  --popover: #1b1a16;
+  --popover-foreground: #e8e4dc;
+
+  --primary: #e8e4dc;
+  --primary-foreground: #14130f;
+  --secondary: #24221c;
+  --secondary-foreground: #e8e4dc;
+
+  --muted: #24221c;
+  --muted-foreground: #9a948a;
+  --accent: #2b2822;
+  --accent-foreground: #e8e4dc;
+
+  --destructive: #d4675a;
+  --destructive-foreground: #14130f;
+
+  --border: #2b2924;
+  --input: #2b2924;
+  --ring: #c2a578;
+
+  --sidebar: #100f0c;
+  --sidebar-foreground: #e8e4dc;
+  --sidebar-primary: #e8e4dc;
+  --sidebar-primary-foreground: #14130f;
+  --sidebar-accent: #23211b;
+  --sidebar-accent-foreground: #e8e4dc;
+  --sidebar-border: #2b2924;
+  --sidebar-ring: #c2a578;
+
+  --prose-faint: #6a655c;
   --selection: #3a3222;
+
   color-scheme: dark;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --paper: #14130f;
-    --paper-raised: #1b1a16;
-    --ink: #e8e4dc;
-    --ink-muted: #9a948a;
-    --ink-faint: #6a655c;
-    --rule: #2b2924;
-    --accent: #c2a578;
-    --selection: #3a3222;
-    color-scheme: dark;
+@theme inline {
+  --font-prose: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia,
+    "Times New Roman", serif;
+  --font-sans: "Geist Variable", ui-sans-serif, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-heading: var(--font-sans);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-prose-faint: var(--prose-faint);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
   }
-}
 
-html,
-body,
-#root {
-  height: 100%;
-}
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
 
-body {
-  background: var(--paper);
-  color: var(--ink);
-  font-family: var(--font-ui);
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
-}
+  body {
+    @apply bg-background text-foreground font-sans;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    /* Stop iOS rubber-banding the whole page behind the editor. */
+    overscroll-behavior-y: none;
+  }
 
-::selection {
-  background: var(--selection);
+  ::selection {
+    background: var(--selection);
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -83,7 +186,7 @@ body {
   font-family: var(--font-prose);
   font-size: 1.1875rem;
   line-height: 1.75;
-  color: var(--ink);
+  color: var(--foreground);
   outline: none;
   /* The measure — about 66 characters, the comfortable range for prose.
      content-box matters here: Tailwind's preflight sets border-box globally,
@@ -92,8 +195,19 @@ body {
   box-sizing: content-box;
   max-width: 38rem;
   margin: 0 auto;
-  padding: 4rem 1.5rem 45vh 1.5rem;
+  padding: 4rem calc(1.5rem + env(safe-area-inset-right, 0px)) 45vh
+    calc(1.5rem + env(safe-area-inset-left, 0px));
   min-height: 100%;
+}
+
+/* On a phone the measure is whatever the screen allows; what matters is that
+   the text is not fighting the edges. */
+@media (max-width: 640px) {
+  .prose-surface {
+    font-size: 1.0625rem;
+    padding: 1.5rem calc(1.25rem + env(safe-area-inset-right, 0px)) 50vh
+      calc(1.25rem + env(safe-area-inset-left, 0px));
+  }
 }
 
 .prose-surface p {
@@ -128,8 +242,8 @@ body {
 .prose-surface blockquote {
   margin: 1.5rem 0;
   padding-left: 1.25rem;
-  border-left: 2px solid var(--rule);
-  color: var(--ink-muted);
+  border-left: 2px solid var(--border);
+  color: var(--muted-foreground);
   font-style: italic;
 }
 
@@ -146,17 +260,28 @@ body {
 
 .prose-surface hr.scene-break::after {
   content: "* * *";
-  color: var(--ink-faint);
+  color: var(--prose-faint);
   letter-spacing: 0.5em;
   font-size: 0.9rem;
 }
 
 .prose-surface hr.scene-break.ProseMirror-selectednode::after {
-  color: var(--accent);
+  color: var(--ring);
 }
 
 .ProseMirror-selectednode {
   outline: none;
+}
+
+/* The sidebar is fixed-positioned on desktop and portaled to <body> on mobile,
+   so it never inherits padding from the app wrapper. Insetting the element that
+   carries the background keeps the panel colour bleeding to the screen edge
+   while its contents stay clear of a landscape sensor housing. */
+[data-sidebar="sidebar"] {
+  /* Only the left inset: the panel hugs the left edge, and its right edge is
+     nowhere near the screen's, so taking both would steal real width from an
+     already narrow panel in landscape. */
+  padding-left: env(safe-area-inset-left, 0px);
 }
 
 /* ------------------------------------------------------------------ */
@@ -167,28 +292,41 @@ body {
   transition: opacity 0.3s ease;
 }
 
+/* The reveal is scoped to the chrome itself. Hanging it off the wrapper's
+   :hover meant that pointing anywhere — including at the page you are writing
+   on — brought the toolbar straight back, which is no fade at all.
+
+   Pointer events stay enabled so the invisible bar is still hoverable: move
+   towards the top of the window and it appears. */
 .focus-mode .chrome {
   opacity: 0;
-  pointer-events: none;
 }
 
-.focus-mode:hover .chrome,
+.focus-mode .chrome:hover,
 .focus-mode .chrome:focus-within {
   opacity: 1;
-  pointer-events: auto;
+}
+
+/* Touch devices have no hover to bring the chrome back, so focus mode stays
+   reachable there by tap instead of fading out of reach. */
+@media (hover: none) {
+  .focus-mode .chrome {
+    opacity: 0.35;
+    pointer-events: auto;
+  }
 }
 
 /* Thin, unobtrusive scrollbars. */
 * {
   scrollbar-width: thin;
-  scrollbar-color: var(--rule) transparent;
+  scrollbar-color: var(--border) transparent;
 }
 *::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 *::-webkit-scrollbar-thumb {
-  background: var(--rule);
+  background: var(--border);
   border-radius: 6px;
   border: 3px solid transparent;
   background-clip: content-box;

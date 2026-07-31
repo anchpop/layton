@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ChevronDown, Fingerprint } from "lucide-react";
 
 import {
   deletePasskey,
@@ -6,8 +7,11 @@ import {
   listPasskeys,
   registerPasskey,
   type PasskeyInfo,
-} from "../lib/passkey";
-import { isIOS, isStandalone } from "../lib/pwa";
+} from "@/lib/passkey";
+import { isIOS, isStandalone } from "@/lib/pwa";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
+import { cn } from "@/lib/utils";
 
 /**
  * Passkey management, tucked below the library.
@@ -64,36 +68,34 @@ export function PasskeyPanel() {
   const count = keys?.length ?? 0;
 
   return (
-    <section className="mt-16 border-t pt-6" style={{ borderColor: "var(--rule)" }}>
+    <section className="mt-16">
+      <Separator />
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between text-left"
+        className="flex w-full items-center justify-between gap-3 py-4 text-left"
       >
-        <span
-          className="text-xs uppercase tracking-widest"
-          style={{ color: "var(--ink-faint)" }}
-        >
+        <span className="text-xs uppercase tracking-widest text-muted-foreground">
           Sign-in &amp; devices
         </span>
-        <span className="text-xs" style={{ color: "var(--ink-faint)" }}>
-          {count === 0
-            ? "No passkeys"
-            : `${count} passkey${count === 1 ? "" : "s"}`}{" "}
-          {open ? "▴" : "▾"}
+        <span className="flex items-center gap-1 text-xs text-muted-foreground">
+          {count === 0 ? "No passkeys" : `${count} passkey${count === 1 ? "" : "s"}`}
+          <ChevronDown
+            className={cn("size-3.5 transition-transform", open && "rotate-180")}
+          />
         </span>
       </button>
 
       {open && (
-        <div className="mt-4">
-          <p className="text-sm leading-relaxed" style={{ color: "var(--ink-muted)" }}>
+        <div className="pb-4">
+          <p className="text-sm leading-relaxed text-muted-foreground">
             A passkey signs you in with Face ID, Touch ID, or your device lock.
             {isIOS() && (
               <>
                 {" "}
-                It is also the only way to sign in once Layton is on your home
-                screen — an emailed link opens in Safari, which the installed
-                app cannot see.
+                It is also the only way in once Layton is on your home screen —
+                an emailed link opens in Safari, which the installed app cannot
+                see.
               </>
             )}
           </p>
@@ -104,16 +106,12 @@ export function PasskeyPanel() {
                 <li
                   key={key.id}
                   className="flex items-center justify-between gap-4 border-b py-2.5 text-sm"
-                  style={{ borderColor: "var(--rule)" }}
                 >
                   <span className="min-w-0">
                     <span className="block truncate">
                       {key.friendly_name || "Passkey"}
                     </span>
-                    <span
-                      className="text-xs"
-                      style={{ color: "var(--ink-faint)" }}
-                    >
+                    <span className="text-xs text-muted-foreground">
                       Added{" "}
                       {new Date(key.created_at).toLocaleDateString(undefined, {
                         month: "short",
@@ -122,35 +120,32 @@ export function PasskeyPanel() {
                       })}
                     </span>
                   </span>
-                  <button
-                    type="button"
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     disabled={busy}
+                    className="shrink-0 text-xs text-muted-foreground"
                     onClick={() => void onRemove(key.id)}
-                    className="shrink-0 text-xs disabled:opacity-40"
-                    style={{ color: "var(--ink-faint)" }}
                   >
                     Remove
-                  </button>
+                  </Button>
                 </li>
               ))}
             </ul>
           )}
 
-          <button
-            type="button"
-            onClick={() => void onAdd()}
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-4"
             disabled={busy}
-            className="mt-4 rounded-md border px-3 py-1.5 text-sm transition disabled:opacity-40"
-            style={{ borderColor: "var(--rule)", color: "var(--ink)" }}
+            onClick={() => void onAdd()}
           >
+            <Fingerprint className="size-4" />
             {busy ? "Waiting for your device…" : "Add a passkey for this device"}
-          </button>
+          </Button>
 
-          {error && (
-            <p className="mt-3 text-sm" style={{ color: "#b4483c" }}>
-              {error}
-            </p>
-          )}
+          {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
         </div>
       )}
     </section>

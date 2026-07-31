@@ -1,28 +1,145 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
+import { ChevronLeft, Maximize2, Minimize2 } from "lucide-react";
 import type { ContainerID } from "loro-crdt";
 
-import { useBookSync, useChapters, useBookTitle, useSyncState } from "../hooks/useBook";
-import { addChapter, bodyContainerId, bookWordCount, setTitle } from "../lib/book";
+import {
+  useBookSync,
+  useChapters,
+  useBookTitle,
+  useSyncState,
+} from "@/hooks/useBook";
+import {
+  addChapter,
+  bodyContainerId,
+  bookWordCount,
+  setTitle,
+} from "@/lib/book";
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarHeader,
+  SidebarInset,
+  SidebarProvider,
+  SidebarTrigger,
+  useSidebar,
+} from "@/components/ui/sidebar";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Editor } from "./Editor";
 import { ChapterList } from "./ChapterList";
 import { SyncBadge } from "./SyncBadge";
 import { ThemeToggle } from "./ThemeToggle";
 
+/**
+ * The status bar sits over the app in an installed iOS PWA (viewport-fit=cover
+ * plus a translucent status bar), so anything pinned to the top has to make
+ * room for it or the controls end up under the clock.
+ */
+const SAFE_TOP = "env(safe-area-inset-top, 0px)";
+const SAFE_BOTTOM = "env(safe-area-inset-bottom, 0px)";
+// Landscape on a notched iPhone puts the sensor housing on one side.
+const SAFE_LEFT = "env(safe-area-inset-left, 0px)";
+const SAFE_RIGHT = "env(safe-area-inset-right, 0px)";
+
 export function BookView({ userId }: { userId: string }) {
   const { bookId } = useParams<{ bookId: string }>();
-  const navigate = useNavigate();
+  // Focus mode lives above the provider so the class can wrap *both* the
+  // sidebar and the editor. On SidebarInset alone it could never reach the
+  // sidebar, which is its sibling — and hiding the chapter panel is most of
+  // the point of focus mode.
+  const [focusMode, setFocusMode] = useState(false);
+  // The panel is controlled here so entering focus mode can close it at the
+  // transition. Syncing it from an effect would fight the user: shadcn rebuilds
+  // `setOpen` whenever `open` changes, so the effect would re-fire on every
+  // manual toggle and immediately undo it.
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
-  const sync = useBookSync(bookId ?? null, userId);
+  if (!bookId) return null;
+
+  return (
+    <SidebarProvider
+      open={sidebarOpen}
+      onOpenChange={(open) => {
+        setSidebarOpen(open);
+        // Asking for the panel back — via the trigger or Cmd+\ — means you are
+        // done being undistracted. Leaving focusMode true here would strand it
+        // showing an opaque sidebar it believes is hidden.
+        if (open) setFocusMode(false);
+      }}
+      className={focusMode ? "focus-mode" : undefined}
+    >
+      <BookWorkspace
+        bookId={bookId}
+        userId={userId}
+        focusMode={focusMode}
+        setFocusMode={setFocusMode}
+        setSidebarOpen={setSidebarOpen}
+      />
+    </SidebarProvider>
+  );
+}
+
+function BookWorkspace({
+  bookId,
+  userId,
+  focusMode,
+  setFocusMode,
+  setSidebarOpen,
+}: {
+  bookId: string;
+  userId: string;
+  focusMode: boolean;
+  setFocusMode: (focused: boolean) => void;
+  setSidebarOpen: (open: boolean) => void;
+}) {
+  const navigate = useNavigate();
+  const { isMobile, openMobile, setOpenMobile } = useSidebar();
+
+  /**
+   * Entering focus mode puts away whichever panel is showing. The desktop
+   * panel and the mobile drawer are separate state inside shadcn's provider,
+   * so this has to live in here to reach both — getting one and not the other
+   * would leave the drawer sitting over a supposedly distraction-free page.
+   */
+  const toggleFocus = useCallback(() => {
+    const nowFocused = !focusMode;
+    setFocusMode(nowFocused);
+    setSidebarOpen(!nowFocused);
+    if (nowFocused) setOpenMobile(false);
+  }, [focusMode, setFocusMode, setSidebarOpen, setOpenMobile]);
+
+  // Opening the drawer is the mobile half of that same invariant. shadcn routes
+  // mobile toggles through its own `openMobile` state rather than the
+  // `onOpenChange` the desktop panel uses, so it cannot be caught up there.
+  useEffect(() => {
+    if (openMobile && focusMode) setFocusMode(false);
+  }, [openMobile, focusMode, setFocusMode]);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "." && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        toggleFocus();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [toggleFocus]);
+
+  const sync = useBookSync(bookId, userId);
   const doc = sync?.doc ?? null;
   const syncState = useSyncState(sync);
   const chapters = useChapters(doc);
   const title = useBookTitle(doc);
 
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [focusMode, setFocusMode] = useState(false);
   const [titleDraft, setTitleDraft] = useState<string | null>(null);
+  // Set by Escape. `setTitleDraft(null)` cannot do this job: blur() fires
+  // synchronously and its handler still sees the pre-Escape draft, so the
+  // cancelled edit would be saved anyway.
+  const titleEditCancelled = useRef(false);
   const [words, setWords] = useState(0);
 
   // Keep a valid selection as chapters appear, disappear, or arrive from
@@ -42,8 +159,8 @@ export function BookView({ userId }: { userId: string }) {
     return bodyContainerId(doc, activeId);
   }, [doc, activeId, chapters.length]);
 
-  // Word count is derived from the CRDT, refreshed on a gentle cadence rather
-  // than per keystroke — it is ambient information, not a live readout.
+  // Word count is derived from the CRDT on a gentle cadence rather than per
+  // keystroke — it is ambient information, not a live readout.
   useEffect(() => {
     if (!doc) return;
     const tick = () => setWords(bookWordCount(doc));
@@ -59,148 +176,136 @@ export function BookView({ userId }: { userId: string }) {
     return () => clearTimeout(id);
   }, [sync, title, syncState.status]);
 
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "\\" && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        setSidebarOpen((v) => !v);
-      }
-      if (e.key === "." && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        setFocusMode((v) => !v);
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  if (!bookId) return null;
+  /**
+   * Picking a chapter to read closes the drawer on a phone. Creating one does
+   * not: the sidebar is where you name it, and closing the drawer would unmount
+   * the rename field before you could type in it.
+   */
+  function selectChapter(id: string, { closePanel = true } = {}) {
+    setActiveId(id);
+    if (isMobile && closePanel) setOpenMobile(false);
+  }
 
   return (
-    <div className={`flex h-full ${focusMode ? "focus-mode" : ""}`}>
-      {/* ---------------------------------------------------------------- */}
-      {/* Sidebar                                                           */}
-      {/* ---------------------------------------------------------------- */}
-      {sidebarOpen && (
-        <aside
-          className="chrome flex w-64 shrink-0 flex-col border-r"
-          style={{ borderColor: "var(--rule)" }}
+    <>
+      <Sidebar collapsible="offcanvas">
+        <SidebarHeader
+          className="gap-2"
+          style={{ paddingTop: `calc(0.5rem + ${SAFE_TOP})` }}
         >
-          <div className="px-4 pb-3 pt-4">
-            <button
-              type="button"
-              onClick={() => navigate("/")}
-              className="text-xs"
-              style={{ color: "var(--ink-faint)" }}
-            >
-              ← All books
-            </button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 w-fit gap-1 px-2 text-muted-foreground"
+            onClick={() => navigate("/")}
+          >
+            <ChevronLeft className="size-4" />
+            All books
+          </Button>
 
-            <input
-              value={titleDraft ?? title}
-              onChange={(e) => setTitleDraft(e.target.value)}
-              onFocus={() => setTitleDraft(title)}
-              onBlur={() => {
-                if (doc && titleDraft != null) {
-                  setTitle(doc, titleDraft.trim() || "Untitled");
-                }
-                setTitleDraft(null);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") e.currentTarget.blur();
-                if (e.key === "Escape") {
-                  setTitleDraft(null);
-                  e.currentTarget.blur();
-                }
-              }}
-              className="mt-3 w-full bg-transparent text-lg leading-snug outline-none"
-              style={{ fontFamily: "var(--font-prose)", color: "var(--ink)" }}
-              placeholder="Untitled"
+          <Input
+            value={titleDraft ?? title}
+            onChange={(e) => setTitleDraft(e.target.value)}
+            onFocus={() => setTitleDraft(title)}
+            onBlur={() => {
+              if (titleEditCancelled.current) {
+                titleEditCancelled.current = false;
+              } else if (doc && titleDraft != null) {
+                setTitle(doc, titleDraft.trim() || "Untitled");
+              }
+              setTitleDraft(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur();
+              if (e.key === "Escape") {
+                titleEditCancelled.current = true;
+                e.currentTarget.blur();
+              }
+            }}
+            placeholder="Untitled"
+            aria-label="Book title"
+            className="h-auto border-0 bg-transparent px-2 py-1 font-prose !text-lg shadow-none focus-visible:ring-0 dark:bg-transparent"
+          />
+        </SidebarHeader>
+
+        <SidebarContent>
+          {doc && (
+            <ChapterList
+              doc={doc}
+              chapters={chapters}
+              activeId={activeId}
+              onSelect={selectChapter}
             />
-          </div>
+          )}
+        </SidebarContent>
 
-          <div className="min-h-0 flex-1">
-            {doc && (
-              <ChapterList
-                doc={doc}
-                chapters={chapters}
-                activeId={activeId}
-                onSelect={setActiveId}
-              />
-            )}
-          </div>
-
-          <div
-            className="flex items-center justify-between border-t px-4 py-2.5 text-[0.7rem]"
-            style={{ borderColor: "var(--rule)", color: "var(--ink-faint)" }}
-          >
-            <span>{words.toLocaleString()} words</span>
-            <SyncBadge state={syncState} />
-          </div>
-        </aside>
-      )}
-
-      {/* ---------------------------------------------------------------- */}
-      {/* Writing surface                                                   */}
-      {/* ---------------------------------------------------------------- */}
-      <main className="relative min-w-0 flex-1 overflow-y-auto">
-        <div
-          className="chrome absolute right-4 top-3 z-10 flex items-center gap-3 text-[0.7rem]"
-          style={{ color: "var(--ink-faint)" }}
+        <SidebarFooter
+          className="flex-row items-center justify-between border-t px-3 py-2 text-[0.7rem] text-muted-foreground"
+          style={{ paddingBottom: `calc(0.5rem + ${SAFE_BOTTOM})` }}
         >
-          <ThemeToggle />
-          <button
-            type="button"
-            onClick={() => setFocusMode((v) => !v)}
-            title="Focus mode (⌘.)"
-          >
-            {focusMode ? "Exit focus" : "Focus"}
-          </button>
-          <button
-            type="button"
-            onClick={() => setSidebarOpen((v) => !v)}
-            title="Toggle sidebar (⌘\)"
-          >
-            {sidebarOpen ? "Hide panel" : "Show panel"}
-          </button>
-        </div>
+          <span>{words.toLocaleString()} words</span>
+          <SyncBadge state={syncState} />
+        </SidebarFooter>
+      </Sidebar>
 
-        {doc && activeId && containerId ? (
-          <Editor doc={doc} containerId={containerId} chapterId={activeId} />
-        ) : (
-          <div className="flex h-full items-center justify-center">
-            {syncState.status === "loading" ? (
-              <p className="text-sm" style={{ color: "var(--ink-faint)" }}>
-                Opening…
-              </p>
+      <SidebarInset className="min-w-0">
+        <header
+          className="chrome sticky top-0 z-10 flex shrink-0 items-center gap-1 bg-background/85 backdrop-blur-sm"
+          style={{
+            height: `calc(3rem + ${SAFE_TOP})`,
+            paddingTop: SAFE_TOP,
+            paddingLeft: `calc(0.5rem + ${SAFE_LEFT})`,
+            paddingRight: `calc(0.5rem + ${SAFE_RIGHT})`,
+          }}
+        >
+          <SidebarTrigger className="text-muted-foreground" />
+          <div className="flex-1" />
+          <ThemeToggle className="text-muted-foreground" />
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={focusMode ? "Leave focus mode" : "Focus mode (⌘.)"}
+            title={focusMode ? "Leave focus mode" : "Focus mode (⌘.)"}
+            className="text-muted-foreground"
+            onClick={toggleFocus}
+          >
+            {focusMode ? (
+              <Minimize2 className="size-4" />
             ) : (
-              <div className="text-center">
-                <p
-                  style={{
-                    fontFamily: "var(--font-prose)",
-                    fontSize: "1.05rem",
-                    color: "var(--ink-muted)",
-                  }}
-                >
-                  A blank page.
-                </p>
-                <button
-                  type="button"
-                  className="mt-3 rounded-md px-3 py-1.5 text-sm font-medium"
-                  style={{ background: "var(--ink)", color: "var(--paper)" }}
-                  onClick={() => {
-                    if (!doc) return;
-                    const created = addChapter(doc, "Chapter One");
-                    setActiveId(created.id);
-                  }}
-                >
-                  Begin chapter one
-                </button>
-              </div>
+              <Maximize2 className="size-4" />
             )}
-          </div>
-        )}
-      </main>
-    </div>
+          </Button>
+        </header>
+
+        {/* SidebarInset already renders <main>; a nested one would be invalid. */}
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {doc && activeId && containerId ? (
+            <Editor doc={doc} containerId={containerId} chapterId={activeId} />
+          ) : (
+            <div className="flex h-full items-center justify-center px-6">
+              {syncState.status === "loading" ? (
+                <p className="text-sm text-muted-foreground">Opening…</p>
+              ) : (
+                <div className="text-center">
+                  <p className="font-prose text-lg text-muted-foreground">
+                    A blank page.
+                  </p>
+                  <Button
+                    className="mt-4"
+                    onClick={() => {
+                      if (!doc) return;
+                      const created = addChapter(doc, "Chapter One");
+                      setActiveId(created.id);
+                    }}
+                  >
+                    Begin chapter one
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </SidebarInset>
+    </>
   );
 }

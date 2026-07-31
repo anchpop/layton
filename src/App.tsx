@@ -1,42 +1,52 @@
 import { lazy, Suspense } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
-import { useAuth, type AuthUser } from "./hooks/useAuth";
-import { usePasskeyGate } from "./hooks/usePasskeyGate";
-import { useTheme } from "./components/ThemeToggle";
-import { Auth } from "./components/Auth";
-import { Library } from "./components/Library";
-import { PasskeySetup } from "./components/PasskeySetup";
-import { ChunkBoundary } from "./components/ChunkBoundary";
-import { UpdatePrompt } from "./components/UpdatePrompt";
+
+import { useAuth, type AuthUser } from "@/hooks/useAuth";
+import { usePasskeyGate } from "@/hooks/usePasskeyGate";
+import { ThemeProvider } from "@/components/ThemeProvider";
+import { Auth } from "@/components/Auth";
+import { Library } from "@/components/Library";
+import { PasskeySetup } from "@/components/PasskeySetup";
+import { ChunkBoundary } from "@/components/ChunkBoundary";
+import { UpdatePrompt } from "@/components/UpdatePrompt";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { Toaster } from "@/components/ui/sonner";
 
 // The editor pulls in Loro's wasm bundle and ProseMirror — around a megabyte
 // gzipped. Signing in and browsing the library shouldn't pay for that, so it
 // loads when the first book is opened.
 const BookView = lazy(() =>
-  import("./components/BookView").then((m) => ({ default: m.BookView })),
+  import("@/components/BookView").then((m) => ({ default: m.BookView })),
 );
 
 export default function App() {
   const { user, loading, offline } = useAuth();
-  useTheme(); // applies the stored theme preference on boot
 
   return (
-    <>
+    <ThemeProvider>
+      <TooltipProvider delayDuration={300}>
       {/* Sits outside the auth branch so a new version can be offered on any
           screen, including the sign-in page of an installed app. */}
       <UpdatePrompt />
+      {/* Clear the home indicator in an installed iOS app. */}
+      <Toaster
+        position="bottom-center"
+        offset={{ bottom: "calc(1rem + env(safe-area-inset-bottom, 0px))" }}
+        mobileOffset={{
+          bottom: "calc(1rem + env(safe-area-inset-bottom, 0px))",
+        }}
+      />
       {loading ? (
         <div className="flex min-h-full items-center justify-center">
-          <span className="text-sm" style={{ color: "var(--ink-faint)" }}>
-            …
-          </span>
+          <span className="text-sm text-muted-foreground">…</span>
         </div>
       ) : !user ? (
         <Auth />
       ) : (
         <SignedIn user={user} offline={offline} />
       )}
-    </>
+      </TooltipProvider>
+    </ThemeProvider>
   );
 }
 
@@ -63,10 +73,7 @@ function SignedIn({ user, offline }: { user: AuthUser; offline: boolean }) {
               <Suspense
                 fallback={
                   <div className="flex h-full items-center justify-center">
-                    <span
-                      className="text-sm"
-                      style={{ color: "var(--ink-faint)" }}
-                    >
+                    <span className="text-sm text-muted-foreground">
                       Opening…
                     </span>
                   </div>
