@@ -14,6 +14,10 @@ export const supabase = createClient(url, key, {
     persistSession: true,
     autoRefreshToken: true,
     detectSessionInUrl: true,
+    // Passkey APIs are opt-in and throw a descriptive error if called without
+    // this. They are what let the installed PWA sign in at all on iOS, where a
+    // magic link opened in Safari can never reach the home-screen app.
+    experimental: { passkey: true },
   },
   realtime: {
     params: { eventsPerSecond: 20 },

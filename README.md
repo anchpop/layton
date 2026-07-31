@@ -4,7 +4,7 @@ A quiet, offline-first place to write fiction. Your work syncs to your account
 across every device, merges without conflicts, and keeps working when the
 network doesn't.
 
-**Live:** https://layton.nauseam.workers.dev
+**Live:** https://layton.chadnauseam.com
 
 ---
 
@@ -17,6 +17,10 @@ network doesn't.
   breaks (`***` on an empty line), first-paragraph indent suppression.
 - **Focus mode** (`⌘.`) fades the interface away. `⌘\` toggles the sidebar.
 - **Light and dark**, following the system by default.
+- **Installable.** Add it to your home screen or dock and it works with no
+  network at all — the app shell, the editor, and the CRDT engine are all
+  precached.
+- **Passkeys.** Sign in with Face ID, Touch ID, or your device lock.
 
 ## Architecture
 
@@ -84,6 +88,55 @@ client passes in. That bound is what makes it safe: the client provably already
 folded those rows into the snapshot, and a concurrent writer's newer rows are
 left untouched.
 
+## Sign-in, and why passkeys matter here
+
+Email magic links work, but they cannot get you into the *installed* app on
+iOS. A home-screen PWA runs in its own storage context; a link opened from Mail
+launches Safari, the session lands there, and the installed app never sees it.
+
+So the first sign-in offers to create a passkey, and that is what the installed
+app uses from then on. Supabase issues discoverable credentials
+(`residentKey: required`), so signing in needs no email typed first — just the
+device prompt.
+
+WebAuthn binds a credential to one `rp_id`, which must match the origin's host.
+That pins passkeys to a single canonical domain (`layton.chadnauseam.com`) and
+is why the `workers.dev` route is switched off: two origins would mean passkeys
+that silently fail on one of them.
+
+Local passkey testing therefore needs `rp_id` and `rp_origins` in
+`supabase/config.toml` temporarily pointed at `localhost`. Magic links work
+locally without any change.
+
+### Staying signed in offline
+
+Supabase treats a session whose access token has genuinely expired as dead once
+the refresh call fails — correct for a normal web app, wrong for this one. It
+would strand you at a sign-in screen you cannot complete, with a finished
+chapter sitting in IndexedDB behind it.
+
+Two things prevent that. Tokens last a week (`jwt_expiry`), and when a refresh
+fails *for network reasons specifically*, the app falls back to the identity it
+remembered on this device and keeps writing. That grants the client nothing:
+row-level security still gates every read and write on the server, and edits
+made in the meantime queue in the outbox until the connection returns.
+
+## The PWA
+
+`vite-plugin-pwa` in `generateSW` mode precaches the whole shell — including
+Loro's ~3 MB wasm, which needs `maximumFileSizeToCacheInBytes` raised well past
+Workbox's 2 MiB default. Without that the file is dropped silently and the
+editor cannot open offline, which is the entire point.
+
+Updates install in the background but never reload the page on their own: a
+swap mid-sentence would tear down the live editor and lose your cursor and
+scroll position. A new build waits behind a quiet prompt, and open tabs check
+hourly.
+
+Supabase calls are pinned to `NetworkOnly`. A stale cached API response would
+be worse than a clean failure, because sync already knows how to handle
+failure.
+
 ## Local development
 
 ```bash
@@ -101,7 +154,9 @@ pnpx supabase config push       # site_url + redirect allow-list
 ```
 
 Add your dev origin to `additional_redirect_urls` in `supabase/config.toml`,
-otherwise magic links bounce.
+otherwise magic links bounce. The service worker is disabled in dev
+(`devOptions.enabled: false`) so you are not debugging a stale cache; run
+`pnpm build && pnpm preview` to exercise it.
 
 ## Deploying
 
@@ -111,7 +166,9 @@ npx wrangler deploy
 ```
 
 `wrangler.jsonc` is assets-only with `not_found_handling:
-single-page-application`, so client-side routes resolve on hard refresh.
+single-page-application`, so client-side routes resolve on hard refresh. It
+serves one custom domain; adding a `routes` entry is what disables the
+`workers.dev` URL, which is deliberate (see passkeys above).
 
 Because `VITE_*` values are baked into the bundle at build time, the publishable
 key ships to the browser — which is what it is for. Every table is protected by
@@ -137,7 +194,11 @@ src/
     localStore.ts  IndexedDB snapshot cache + outbox
     schema.ts      ProseMirror schema, deliberately small
     bytes.ts       base64 bridge between Loro and PostgREST
-  hooks/           auth, library, and CRDT-to-React subscriptions
-  components/      Auth, Library, BookView, ChapterList, Editor
+    passkey.ts     WebAuthn enrolment, sign-in, and management
+    pwa.ts         installed-app and platform detection
+  hooks/           auth (with offline fallback), library, passkey gate,
+                   and CRDT-to-React subscriptions
+  components/      Auth, PasskeySetup, PasskeyPanel, Library, BookView,
+                   ChapterList, Editor, UpdatePrompt
 supabase/migrations/
 ```

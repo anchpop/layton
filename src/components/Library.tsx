@@ -4,6 +4,7 @@ import { useNavigate } from "react-router";
 import { useLibrary } from "../hooks/useLibrary";
 import { supabase } from "../lib/supabase";
 import { ThemeToggle } from "./ThemeToggle";
+import { PasskeyPanel } from "./PasskeyPanel";
 
 function formatWhen(iso: string): string {
   const then = new Date(iso);
@@ -160,6 +161,8 @@ export function Library({ userId, email }: { userId: string; email: string }) {
           ))}
         </ul>
       )}
+
+      <PasskeyPanel />
     </div>
   );
 }

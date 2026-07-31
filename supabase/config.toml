@@ -156,13 +156,17 @@ max_indexes = 5
 enabled = true
 # The base URL of your website. Used as an allow-list for redirects and for constructing URLs used
 # in emails.
-site_url = "https://layton.nauseam.workers.dev"
+site_url = "https://layton.chadnauseam.com"
 # The public URL that Auth serves on. Defaults to the API external URL with `/auth/v1` appended.
 # external_url = ""
 # A list of *exact* URLs that auth providers are permitted to redirect to post authentication.
-additional_redirect_urls = ["https://layton.nauseam.workers.dev", "http://localhost:5173"]
+additional_redirect_urls = ["https://layton.chadnauseam.com", "http://localhost:5173"]
 # How long tokens are valid for, in seconds. Defaults to 3600 (1 hour), maximum 604,800 (1 week).
-jwt_expiry = 3600
+# One week (the maximum). An offline-first app must survive being opened on a
+# plane: once the access token truly expires, Supabase treats the session as
+# dead rather than refreshing it later, which would strand a writer at the
+# sign-in screen with their work sitting in IndexedDB.
+jwt_expiry = 604800
 # JWT issuer URL. If not set, defaults to auth.external_url.
 # jwt_issuer = ""
 # Path to JWT signing key. DO NOT commit your signing keys file to git.
@@ -185,14 +189,20 @@ minimum_password_length = 6
 password_requirements = ""
 
 # Configure passkey sign-ins.
-# [auth.passkey]
-# enabled = false
+# Passkeys are what make the installed PWA usable: an iOS home-screen app runs
+# in its own storage context, so a magic link opened in Safari never reaches
+# it. A passkey signs you in inside the app itself.
+[auth.passkey]
+enabled = true
 
-# Configure WebAuthn relying party settings (required when passkey is enabled).
-# [auth.webauthn]
-# rp_display_name = "Supabase"
-# rp_id = "localhost"
-# rp_origins = ["http://127.0.0.1:3000"]
+# WebAuthn relying party settings.
+# rp_id must equal (or be a registrable parent of) the origin's host, so this
+# is pinned to the canonical domain. Local passkey testing needs rp_id set to
+# "localhost" temporarily — see README.
+[auth.webauthn]
+rp_display_name = "Layton"
+rp_id = "layton.chadnauseam.com"
+rp_origins = ["https://layton.chadnauseam.com"]
 
 [auth.rate_limit]
 # Number of emails that can be sent per hour. Requires auth.email.smtp to be enabled.
