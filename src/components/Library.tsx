@@ -1,22 +1,18 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
-import { Plus } from "lucide-react";
+import { Archive, Plus } from "lucide-react";
+import { toast } from "sonner";
 
 import { useLibrary } from "@/hooks/useLibrary";
-import { supabase } from "@/lib/supabase";
+import { supabase, type BookRow } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { ThemeToggle } from "./ThemeToggle";
 import { PasskeyPanel } from "./PasskeyPanel";
 
@@ -35,7 +31,7 @@ function formatWhen(iso: string): string {
 }
 
 export function Library({ userId, email }: { userId: string; email: string }) {
-  const { books, loading, error, createBook, deleteBook } = useLibrary(userId);
+  const { books, loading, error, createBook, setArchived } = useLibrary(userId);
   const [creating, setCreating] = useState(false);
   const navigate = useNavigate();
 
@@ -44,6 +40,23 @@ export function Library({ userId, email }: { userId: string; email: string }) {
     const book = await createBook("Untitled");
     setCreating(false);
     if (book) navigate(`/b/${book.id}`);
+  }
+
+  /**
+   * There is no archive shelf to browse yet, so the toast is the only route
+   * back. It is worth the few lines: a long press is easy to trigger by
+   * accident on a phone, and a book vanishing from the only list that shows it
+   * — with nothing to press — would read as lost work even though every word
+   * is still on the server.
+   */
+  async function onArchive(book: BookRow) {
+    if (!(await setArchived(book.id, true))) return;
+    toast(`Archived “${book.title || "Untitled"}”`, {
+      action: {
+        label: "Undo",
+        onClick: () => void setArchived(book.id, false),
+      },
+    });
   }
 
   return (
@@ -90,53 +103,34 @@ export function Library({ userId, email }: { userId: string; email: string }) {
       ) : (
         <ul className="mt-2">
           {books.map((book) => (
-            <li key={book.id} className="group border-b">
-              <div className="flex items-center gap-2 py-3">
-                <button
-                  type="button"
-                  className="min-w-0 flex-1 rounded-md px-1 py-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  onClick={() => navigate(`/b/${book.id}`)}
-                >
-                  <span className="block truncate font-prose text-lg">
-                    {book.title || "Untitled"}
-                  </span>
-                  <span className="mt-0.5 block text-xs text-muted-foreground">
-                    Edited {formatWhen(book.updated_at)}
-                  </span>
-                </button>
-
-                <AlertDialog>
-                  <AlertDialogTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="shrink-0 text-xs text-muted-foreground transition can-hover:opacity-0 can-hover:group-hover:opacity-100 can-hover:group-focus-within:opacity-100"
-                    >
-                      Delete
-                    </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>
-                        Delete “{book.title || "Untitled"}”?
-                      </AlertDialogTitle>
-                      <AlertDialogDescription>
-                        Every chapter in this book is deleted from your account
-                        and from this device. It cannot be undone.
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Keep it</AlertDialogCancel>
-                      <AlertDialogAction
-                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                        onClick={() => void deleteBook(book.id)}
-                      >
-                        Delete forever
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
-              </div>
+            <li key={book.id} className="border-b">
+              {/* Archiving lives here rather than on the row because putting a
+                  book away is a once-a-year act and opening one is a daily
+                  one. Radix raises this on right-click and on a long press, so
+                  it is reachable on a phone without a control sitting next to
+                  every title waiting to be hit by mistake. */}
+              <ContextMenu>
+                <ContextMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className="w-full rounded-md px-1 py-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    onClick={() => navigate(`/b/${book.id}`)}
+                  >
+                    <span className="block truncate font-prose text-lg">
+                      {book.title || "Untitled"}
+                    </span>
+                    <span className="mt-0.5 block text-xs text-muted-foreground">
+                      Edited {formatWhen(book.updated_at)}
+                    </span>
+                  </button>
+                </ContextMenuTrigger>
+                <ContextMenuContent>
+                  <ContextMenuItem onSelect={() => void onArchive(book)}>
+                    <Archive className="size-4" />
+                    Archive
+                  </ContextMenuItem>
+                </ContextMenuContent>
+              </ContextMenu>
             </li>
           ))}
         </ul>

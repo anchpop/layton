@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { supabase, type BookRow } from "../lib/supabase";
-import { deleteLocalBook } from "../lib/localStore";
 
 export function useLibrary(userId: string | null) {
   const [books, setBooks] = useState<BookRow[]>([]);
@@ -46,22 +45,29 @@ export function useLibrary(userId: string | null) {
     [userId, refresh],
   );
 
-  const deleteBook = useCallback(
-    async (bookId: string) => {
-      // Cascades to book_updates via the foreign key.
+  /**
+   * Takes a book off the shelf without destroying a word of it.
+   *
+   * `refresh` already filters on `archived_at is null`, so stamping the column
+   * is the whole operation — the row, its update log, and the local snapshot
+   * all stay exactly where they are. Nothing here is a one-way door: clearing
+   * the column puts the book back, whenever there is a screen that does it.
+   */
+  const setArchived = useCallback(
+    async (bookId: string, archived: boolean) => {
       const { error: err } = await supabase
         .from("books")
-        .delete()
+        .update({ archived_at: archived ? new Date().toISOString() : null })
         .eq("id", bookId);
       if (err) {
         setError(err.message);
-        return;
+        return false;
       }
-      await deleteLocalBook(bookId);
       await refresh();
+      return true;
     },
     [refresh],
   );
 
-  return { books, loading, error, refresh, createBook, deleteBook };
+  return { books, loading, error, refresh, createBook, setArchived };
 }
