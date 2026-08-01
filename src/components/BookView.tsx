@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 import { Editor } from "./Editor";
 import { ChapterList } from "./ChapterList";
 import { SyncBadge } from "./SyncBadge";
@@ -68,7 +69,24 @@ export function BookView({ userId }: { userId: string }) {
         // showing an opaque sidebar it believes is hidden.
         if (open) setFocusMode(false);
       }}
-      className={focusMode ? "focus-mode" : undefined}
+      /**
+       * The editor is an app shell, not a document: the window never scrolls,
+       * the prose pane does.
+       *
+       * shadcn's wrapper ships `min-h-svh`, which only sets a floor — the flex
+       * column below it still sizes to its content, so `flex-1 overflow-y-auto`
+       * on the prose pane grew to the full height of the chapter instead of
+       * scrolling. That left two scrollers stacked on the same gesture (the
+       * window, and a prose pane with only its trailing padding to give), and
+       * Chrome latches a wheel gesture to whichever it hits first, so a scroll
+       * would travel a few hundred pixels and then refuse to continue.
+       *
+       * A definite height is what actually constrains the column; `overflow-hidden`
+       * keeps a future overgrown child from quietly reopening a window scrollbar.
+       * `svh` rather than `dvh` so a phone hiding its browser chrome mid-scroll
+       * does not resize the shell underneath the caret.
+       */
+      className={cn("h-svh overflow-hidden", focusMode && "focus-mode")}
     >
       <BookWorkspace
         bookId={bookId}
@@ -249,8 +267,13 @@ function BookWorkspace({
       </Sidebar>
 
       <SidebarInset className="min-w-0">
+        {/* Not sticky: the bar is a sibling of the scroll pane, not a passenger
+            inside it, so it stays put on its own. It used to need `sticky` and a
+            translucent blur because the whole window scrolled and prose ran
+            underneath — with the shell pinned there is nothing behind it to
+            blur, and a full-width backdrop-filter is a repaint on every frame. */}
         <header
-          className="chrome sticky top-0 z-10 flex shrink-0 items-center gap-1 bg-background/85 backdrop-blur-sm"
+          className="chrome z-10 flex shrink-0 items-center gap-1 bg-background"
           style={{
             height: `calc(3rem + ${SAFE_TOP})`,
             paddingTop: SAFE_TOP,
