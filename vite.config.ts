@@ -1,11 +1,43 @@
 import path from "node:path";
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { VitePWA } from "vite-plugin-pwa";
 
+const REQUIRED_ENV = [
+  "VITE_SUPABASE_URL",
+  "VITE_SUPABASE_PUBLISHABLE_KEY",
+] as const;
+
+/**
+ * Refuses to build without the Supabase credentials.
+ *
+ * Vite inlines a missing `import.meta.env` var as `undefined` and carries on,
+ * so a typo'd or unset variable produces a bundle that builds green and then
+ * throws on the first line of the app. In CI that is the worst shape a failure
+ * can take: the run reports success and layton.space serves a blank page.
+ *
+ * Checking here rather than in the workflow means every build is covered by
+ * one rule — CI, a colleague's laptop, and `pnpm dev` alike.
+ */
+function requireEnv(): Plugin {
+  return {
+    name: "layton:require-env",
+    config(_config, { mode }) {
+      const env = loadEnv(mode, process.cwd(), "VITE_");
+      const missing = REQUIRED_ENV.filter((name) => !env[name]);
+      if (missing.length > 0) {
+        throw new Error(
+          `Missing ${missing.join(", ")}. Copy .env.example to .env.local and fill it in.`,
+        );
+      }
+    },
+  };
+}
+
 export default defineConfig({
   plugins: [
+    requireEnv(),
     react(),
     tailwindcss(),
     VitePWA({

@@ -1,0 +1,76 @@
+# Ship main to layton.space.
+#
+# The two steps are exactly what `pnpm run deploy` does locally, against the
+# wrangler pinned in devDependencies — split apart here only so the Cloudflare
+# token is in scope for the upload and nowhere else.
+#
+# Superseded deploys are cancelled rather than queued, so an older commit can
+# never land on top of a newer one — GitHub does not promise queue ordering, and
+# cancelling is a stronger guarantee than hoping for it.
+#
+# Safe to cancel because wrangler uploads every asset before it creates the
+# version that points at them: an interrupted run leaves the previous version
+# serving, never a half-assembled one.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  # Lets you re-ship the current main from the Actions tab without an empty
+  # commit — useful when a deploy fails on Cloudflare's side rather than ours.
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Names the target in the Actions UI and gives the run a place to hang the
+    # live URL, so a green check links straight to what it shipped.
+    environment:
+      name: production
+      url: https://layton.space
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      # Reads the pnpm version from `packageManager` in package.json, so the
+      # runner and your machine are on the same pnpm without a second place to
+      # bump when it moves.
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          # Tracks the major rather than a pin: this is a static build with no
+          # native addons, and a stale Node is a security problem, not a feature.
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm lint
+
+      # The build is `tsc -b && vite build`, so a type error stops the release
+      # before anything reaches Cloudflare.
+      #
+      # These two values are compiled into the client bundle by Vite and are
+      # already public in the shipped JavaScript — they are repo *variables*, not
+      # secrets, so that nobody is misled into treating them as sensitive.
+      - name: Build
+        run: pnpm run build
+        env:
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.VITE_SUPABASE_PUBLISHABLE_KEY }}
+
+      # Deliberately a step of its own. The build runs the whole dependency tree
+      # as code; keeping the deploy token out of that step means a compromised
+      # transitive dependency cannot read the one credential that can publish to
+      # layton.space.
+      - name: Deploy
+        run: pnpm exec wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}

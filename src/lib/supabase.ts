@@ -1,13 +1,11 @@
 import { createClient } from "@supabase/supabase-js";
 
+// Guaranteed present: the build refuses to start without them (see the
+// `layton:require-env` plugin in vite.config.ts). Checking again here would put
+// the same invariant in two places and only ever fire after a broken bundle had
+// already shipped.
 const url = import.meta.env.VITE_SUPABASE_URL;
 const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-
-if (!url || !key) {
-  throw new Error(
-    "Missing VITE_SUPABASE_URL / VITE_SUPABASE_PUBLISHABLE_KEY. Copy .env.example to .env.local and fill it in.",
-  );
-}
 
 export const supabase = createClient(url, key, {
   auth: {
