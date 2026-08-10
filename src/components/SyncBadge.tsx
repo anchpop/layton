@@ -37,6 +37,20 @@ function describe(state: SyncState): {
   if (state.status === "loading") {
     return { label: "Opening", dot: "bg-muted-foreground", detail: "Loading" };
   }
+  if (state.status === "locked") {
+    return {
+      label: "Locked",
+      dot: "bg-muted-foreground",
+      detail: "This book is sealed until you enter your master password",
+    };
+  }
+  if (state.status === "unavailable") {
+    return {
+      label: "Unavailable",
+      dot: "bg-destructive",
+      detail: "This book could not be found on the server or on this device",
+    };
+  }
   if (state.status === "offline") {
     return {
       label: "Offline",

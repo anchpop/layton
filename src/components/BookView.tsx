@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
-import { ChevronLeft, Maximize2, Minimize2 } from "lucide-react";
+import { ChevronLeft, Lock, Maximize2, Minimize2 } from "lucide-react";
 import type { ContainerID } from "loro-crdt";
 
 import {
@@ -9,6 +9,7 @@ import {
   useBookTitle,
   useSyncState,
 } from "@/hooks/useBook";
+import { useVaultStatus } from "@/hooks/useVault";
 import {
   addChapter,
   bodyContainerId,
@@ -32,6 +33,71 @@ import { Editor } from "./Editor";
 import { ChapterList } from "./ChapterList";
 import { SyncBadge } from "./SyncBadge";
 import { ThemeToggle } from "./ThemeToggle";
+import { UnlockPrivate } from "./UnlockPrivate";
+
+/**
+ * A private book, reached while its key is put away — by the idle timer, by the
+ * lock button, or by opening its address in a browser that has never had it.
+ *
+ * The title is not shown, because it is not known: it is sealed under the same
+ * key as the prose. All this page can honestly say is that something is here.
+ */
+function LockedBook({ onBack }: { onBack: () => void }) {
+  return (
+    <div className="flex h-full w-full flex-1 items-center justify-center px-6">
+      <div className="w-full max-w-sm">
+        <Lock className="size-5 text-muted-foreground" />
+        <h1 className="mt-3 font-prose text-xl tracking-tight">
+          This book is locked.
+        </h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Type your master password to open it. Your place is kept.
+        </p>
+        <UnlockPrivate className="mt-4" />
+        <Button
+          variant="link"
+          className="mt-4 h-auto p-0 text-xs text-muted-foreground"
+          onClick={onBack}
+        >
+          <ChevronLeft className="size-3" />
+          All books
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * No wrapper for this book could be found, on the server or on this device.
+ *
+ * Distinct from locked on purpose. A password prompt here would be an
+ * instruction that cannot work: there is no key to hand over, because there is
+ * nothing to unlock — the book has been deleted, or this device has never seen
+ * it and cannot reach the server to ask.
+ */
+function BookUnavailable({ onBack }: { onBack: () => void }) {
+  return (
+    <div className="flex h-full w-full flex-1 items-center justify-center px-6">
+      <div className="w-full max-w-sm">
+        <h1 className="font-prose text-xl tracking-tight">
+          This book could not be opened.
+        </h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          It is not on this device, and the server did not offer it. If you are
+          offline, reload this page once you are back.
+        </p>
+        <Button
+          variant="link"
+          className="mt-4 h-auto p-0 text-xs text-muted-foreground"
+          onClick={onBack}
+        >
+          <ChevronLeft className="size-3" />
+          All books
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 /**
  * The status bar sits over the app in an installed iOS PWA (viewport-fit=cover
@@ -149,6 +215,7 @@ function BookWorkspace({
   const sync = useBookSync(bookId, userId);
   const doc = sync?.doc ?? null;
   const syncState = useSyncState(sync);
+  const { privateUnlocked } = useVaultStatus();
   const chapters = useChapters(doc);
   const title = useBookTitle(doc);
 
@@ -202,6 +269,24 @@ function BookWorkspace({
   function selectChapter(id: string, { closePanel = true } = {}) {
     setActiveId(id);
     if (isMobile && closePanel) setOpenMobile(false);
+  }
+
+  if (syncState.status === "unavailable") {
+    return <BookUnavailable onBack={() => navigate("/")} />;
+  }
+
+  /**
+   * Two ways to be locked, and both have to be checked here.
+   *
+   * The engine reports `locked` when it never unwrapped a key, so nothing of
+   * the book ever reached memory. But when the vault locks *while this page is
+   * open*, the engine is rebuilt by an effect — and an effect runs after the
+   * render it was scheduled by, which would put one painted frame of private
+   * prose on screen after the lock. Deriving the second condition from the
+   * vault as it is right now means that frame does not exist.
+   */
+  if (syncState.status === "locked" || (syncState.isPrivate && !privateUnlocked)) {
+    return <LockedBook onBack={() => navigate("/")} />;
   }
 
   return (

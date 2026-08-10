@@ -1,8 +1,9 @@
 # Layton
 
 A quiet, offline-first place to write fiction. Your work syncs to your account
-across every device, merges without conflicts, and keeps working when the
-network doesn't.
+across every device, merges without conflicts, keeps working when the network
+doesn't, and is encrypted end to end — the server holds your novel without ever
+being able to read a word of it.
 
 **Live:** https://layton.space
 
@@ -23,25 +24,36 @@ network doesn't.
   network at all — the app shell, the editor, and the CRDT engine are all
   precached.
 - **Passkeys.** Sign in with Face ID, Touch ID, or your device lock.
+- **End-to-end encrypted, always.** Every chapter, every edit, and every title
+  is sealed in the browser under a master password that never leaves it. There
+  is no plaintext mode and no opt-out.
+- **Private books.** Mark a book private and it vanishes from the library
+  fifteen minutes after you stop writing, or the moment you press the lock. A
+  locked library gives no sign that private books exist at all.
 
 ## Architecture
 
 ```
 Browser                          Supabase (Postgres)          Cloudflare
 ┌──────────────────────┐         ┌──────────────────┐         ┌──────────┐
-│ ProseMirror          │         │ books            │         │ Workers  │
-│   ↕ loro-prosemirror │         │ book_updates ────┼─Realtime│  Assets  │
-│ Loro CRDT (one doc   │◄───────►│   (append-only   │         │ (static  │
-│   per book)          │  REST   │    Loro log)     │         │  SPA)    │
-│   ↕                  │         │ RLS: owner only  │         └──────────┘
-│ IndexedDB            │         └──────────────────┘
-│   snapshot + outbox  │
+│ ProseMirror          │         │ user_keys        │         │ Workers  │
+│   ↕ loro-prosemirror │         │ books            │         │  Assets  │
+│ Loro CRDT (one doc   │         │ book_updates ────┼─Realtime│ (static  │
+│   per book)          │◄───────►│   (append-only   │         │  SPA)    │
+│   ↕ seal / unseal    │  REST   │    log of sealed │         └──────────┘
+│ IndexedDB            │         │    envelopes)    │
+│   sealed snapshot    │         │ RLS: owner only  │
+│   + outbox           │         └──────────────────┘
 └──────────────────────┘
+        ▲
+        └── the only place plaintext exists
 ```
 
 There is no server-side application code. Cloudflare serves static files; the
 browser talks straight to Supabase, and Postgres row-level security is the
-authorization boundary.
+authorization boundary — but no longer the only one. Everything crossing that
+arrow is ciphertext, so a compromised database, a leaked backup, or a
+subpoenaed Postgres instance yields sealed bytes and timestamps.
 
 ### One Loro document per book
 
@@ -67,10 +79,12 @@ devices resolve to the same CRDT container.
 
 ### Sync protocol
 
-`book_updates` is an append-only log of opaque base64 Loro payloads, in two
-kinds: incremental `update`s, and `snapshot`s that supersede everything before
-them. Reading a book means taking the newest snapshot and applying every update
-with a higher id.
+`book_updates` is an append-only log of sealed Loro payloads, in two kinds:
+incremental `update`s, and `snapshot`s that supersede everything before them.
+Reading a book means taking the newest snapshot and applying every update with a
+higher id. The payloads are opaque to the server in the strong sense — they are
+AES-GCM envelopes under the book's key (see Encryption), so `kind` and `id` are
+the only fields Postgres can act on, which is all compaction needs.
 
 **Ordering.** A client tracks a `watermark`: the highest row id applied *via an
 ordered fetch*. Realtime messages are applied immediately for low latency but
@@ -80,15 +94,112 @@ nor completeness. Every realtime event also schedules an ordered catch-up
 idempotent, so the fast path costs nothing in correctness — and a dropped
 realtime message heals itself instead of becoming a permanently missing edit.
 
-**Offline.** Local updates are written to an IndexedDB outbox *before* any
-attempt to send them, so an edit survives a browser restart. A debounced
-snapshot cache makes cold and offline opens instant.
+**Offline.** Local updates are sealed and then written to an IndexedDB outbox
+*before* any attempt to send them, so an edit survives a browser restart and is
+ciphertext the moment it does. Sealing once on the way in is also why flushing
+is a verbatim upload rather than a second pass. A debounced snapshot cache — the
+snapshot sealed under the same key — makes cold and offline opens instant.
 
 **Compaction.** Once the log passes ~150 rows, the client calls `compact_book`,
 which writes a fresh snapshot and deletes rows at or below the watermark the
 client passes in. That bound is what makes it safe: the client provably already
 folded those rows into the snapshot, and a concurrent writer's newer rows are
 left untouched.
+
+## Encryption
+
+One master password, chosen once. Everything else follows from it.
+
+```
+master password
+   │  PBKDF2-SHA256, 600,000 rounds, per-account salt
+   ▼
+master key ──seals──┬──▶ everyday key ──seals──▶ ordinary books' keys
+                    └──▶ private key  ──seals──▶ private books' keys
+                                                        │
+                                          each book key seals that book's
+                                          title, its update log, and its
+                                          cached snapshot
+```
+
+Both account keys are random and stored only in sealed form, in `user_keys`.
+The password is never transmitted, and neither is anything derived from it.
+
+**Why two account keys.** The difference between an ordinary book and a private
+one is precisely *which key is currently in memory*. The everyday key is kept on
+the device as a non-extractable `CryptoKey` in IndexedDB, so ordinary books open
+with no prompt, offline, forever. The private key is never persisted anywhere —
+it lives in one module variable and dies with the tab, the idle timer, or the
+lock button. One key could not express that difference; a boolean column could
+have, but see below.
+
+**Why a per-book key.** It makes marking a book private a single column update
+rather than a re-encryption of its entire history. Only the wrapping moves from
+one account key to the other; the book's own key is untouched, so every envelope
+already written under it stays valid.
+
+### How private books hide
+
+There is no `is_private` column. Nothing anywhere records which account key a
+book belongs to. The client finds out by trying the everyday key, then — if it
+holds one — the private key, and a row it cannot open is a row it does not
+render.
+
+That is the whole mechanism, and it is deliberately cryptographic rather than
+conditional. With the private key put away there is no flag to read, no count to
+redact, and no `if (!book.isPrivate)` that a future refactor can drop. A private
+book fails at exactly the point a corrupted row would, and is dropped in exactly
+the same silence: no placeholder, no "2 hidden", nothing to notice.
+
+The lock control in the library header is always visible, whether or not the
+account has any private books. Hiding it would be the tell.
+
+Because only the wrapping moves when a book is made private, the *old* wrapping
+stays cryptographically valid forever — so a device still holding the cached
+everyday-key copy would go on opening a book that is no longer meant to be
+visible to it, and nothing would fail to tell it so. The server is therefore
+asked for the wrapping first and the cached copy is the fallback, not the
+preference; an open tab re-checks when it is returned to and when the network
+comes back. Two windows remain by construction: a device with no connection
+keeps whatever access it last had, and a key already inside a running tab
+cannot be taken back out of it.
+
+### Locking
+
+The private key is dropped after **15 minutes** without a keystroke, pointer
+event, or scroll — checked against wall-clock timestamps rather than a timer,
+because a throttled background tab or a suspended laptop would otherwise stretch
+that window. The lock button does the same thing immediately.
+
+When a private book's editing page is open, locking rebuilds the sync engine
+rather than hiding the page. That is the only way to be sure: a `LoroDoc` that
+has imported a chapter cannot be emptied, so the document itself is thrown away
+and the screen becomes a password prompt. Ordinary books sit the transition out
+untouched — losing your caret and your place on the page for a key that never
+applied to them would be a cost with no benefit.
+
+Signing out forgets the device key. The cached books stay in IndexedDB, which is
+safe precisely because they are sealed; the next sign-in asks for the master
+password to get the key back.
+
+### What the server still sees
+
+Encrypting content does not hide that content exists. Anyone with database
+access learns which account owns how many books, when each was created, when
+each was last written in, whether one is archived, and the size and timing of
+every edit. Titles and prose are opaque; the shape of the writing life around
+them is not.
+
+### There is no recovery
+
+No recovery key, no reset, no support path. A copy of the key that could rescue
+a forgotten password is a copy that makes "the server cannot read your writing"
+false. The setup screen says so in those words and asks for a tick.
+
+The only escape is demolition: an "erase everything" path on the unlock screen
+that deletes every book and lets a new vault be created over the empty space.
+It is offered because an account with no way forward at all is worse than an
+honest one-way door.
 
 ## Sign-in, and why passkeys matter here
 
@@ -178,6 +289,12 @@ pnpx supabase db push           # applies supabase/migrations/
 pnpx supabase config push       # site_url + redirect allow-list
 ```
 
+Note that `20260810000000_end_to_end_encryption.sql` **deletes every row in
+`books`**. It has to: rows written before encryption existed cannot be
+re-encrypted, because there is no key they were ever encrypted under. Deleting
+them is what lets `title_cipher` and `wrapped_key` be `NOT NULL`, and what keeps
+a decrypt-or-fall-back branch out of the client permanently.
+
 Add your dev origin to `additional_redirect_urls` in `supabase/config.toml`,
 otherwise magic links bounce. The service worker is disabled in dev
 (`devOptions.enabled: false`) so you are not debugging a stale cache; run
@@ -197,7 +314,10 @@ serves one custom domain; adding a `routes` entry is what disables the
 
 Because `VITE_*` values are baked into the bundle at build time, the publishable
 key ships to the browser — which is what it is for. Every table is protected by
-RLS keyed on `auth.uid()`; the key alone grants nothing.
+RLS keyed on `auth.uid()`; the key alone grants nothing. And since the content
+behind that boundary is sealed, an RLS mistake would leak ciphertext rather than
+prose — the two protections fail independently, which is the point of having
+both.
 
 ## Keyboard
 
@@ -215,16 +335,19 @@ RLS keyed on `auth.uid()`; the key alone grants nothing.
 src/
   lib/
     book.ts        Loro document schema + chapter operations
-    sync.ts        the sync engine (watermark, outbox, compaction)
-    localStore.ts  IndexedDB snapshot cache + outbox
+    sync.ts        the sync engine (watermark, outbox, compaction, sealing)
+    localStore.ts  IndexedDB sealed-snapshot cache, outbox, and device key
+    crypto.ts      the sealed envelope and the key derivations. All WebCrypto
+    vault.ts       which keys are held, how they are got, and when they go
     schema.ts      ProseMirror schema, deliberately small
     bytes.ts       base64 bridge between Loro and PostgREST
     passkey.ts     WebAuthn enrolment, sign-in, and management
     pwa.ts         installed-app and platform detection
-  hooks/           auth (with offline fallback), library, passkey gate,
-                   and CRDT-to-React subscriptions
-  components/      Auth, PasskeySetup, PasskeyPanel, Library, BookView,
-                   ChapterList, Editor, UpdatePrompt
+  hooks/           auth (with offline fallback), library, passkey gate, vault
+                   gate, and CRDT-to-React subscriptions
+  components/      Auth, PasskeySetup, PasskeyPanel, VaultSetup, VaultUnlock,
+                   UnlockPrivate, Library, BookView, ChapterList, Editor,
+                   UpdatePrompt
     ui/            shadcn components (owned, edited in place)
 supabase/migrations/
 ```

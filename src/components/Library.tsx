@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
-import { Archive, Plus } from "lucide-react";
+import { Archive, Lock, LockOpen, Plus } from "lucide-react";
 import { toast } from "sonner";
 
-import { useLibrary } from "@/hooks/useLibrary";
-import { supabase, type BookRow } from "@/lib/supabase";
+import { useLibrary, type LibraryBook } from "@/hooks/useLibrary";
+import { useVaultStatus } from "@/hooks/useVault";
+import { lockPrivate, signOut } from "@/lib/vault";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -13,8 +14,14 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { ThemeToggle } from "./ThemeToggle";
 import { PasskeyPanel } from "./PasskeyPanel";
+import { UnlockPrivate } from "./UnlockPrivate";
 
 function formatWhen(iso: string): string {
   const then = new Date(iso);
@@ -31,8 +38,11 @@ function formatWhen(iso: string): string {
 }
 
 export function Library({ userId, email }: { userId: string; email: string }) {
-  const { books, loading, error, createBook, setArchived } = useLibrary(userId);
+  const { books, loading, error, createBook, setArchived, setPrivate } =
+    useLibrary(userId);
+  const { privateUnlocked } = useVaultStatus();
   const [creating, setCreating] = useState(false);
+  const [asking, setAsking] = useState(false);
   const navigate = useNavigate();
 
   async function onCreate() {
@@ -49,7 +59,7 @@ export function Library({ userId, email }: { userId: string; email: string }) {
    * — with nothing to press — would read as lost work even though every word
    * is still on the server.
    */
-  async function onArchive(book: BookRow) {
+  async function onArchive(book: LibraryBook) {
     if (!(await setArchived(book.id, true))) return;
     toast(`Archived “${book.title || "Untitled"}”`, {
       action: {
@@ -57,6 +67,15 @@ export function Library({ userId, email }: { userId: string; email: string }) {
         onClick: () => void setArchived(book.id, false),
       },
     });
+  }
+
+  async function onSetPrivate(book: LibraryBook, isPrivate: boolean) {
+    if (!(await setPrivate(book, isPrivate))) return;
+    toast(
+      isPrivate
+        ? `“${book.title}” is private. It disappears when you lock.`
+        : `“${book.title}” is an ordinary book again.`,
+    );
   }
 
   return (
@@ -67,17 +86,66 @@ export function Library({ userId, email }: { userId: string; email: string }) {
           <span className="hidden text-muted-foreground sm:inline">
             {email}
           </span>
+          {/*
+            One control, two jobs, and deliberately always present. When the
+            key is put away it asks for it; when the key is held it takes it
+            back immediately. Always visible because hiding it when there are
+            no private books would be the tell: an observer learns that the
+            feature exists, never whether this account uses it.
+          */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="text-muted-foreground"
+                aria-label={
+                  privateUnlocked ? "Lock private books" : "Unlock private books"
+                }
+                onClick={() => {
+                  if (privateUnlocked) {
+                    lockPrivate();
+                    setAsking(false);
+                  } else {
+                    setAsking((open) => !open);
+                  }
+                }}
+              >
+                {privateUnlocked ? (
+                  <LockOpen className="size-4" />
+                ) : (
+                  <Lock className="size-4" />
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {privateUnlocked ? "Lock private books" : "Private books"}
+            </TooltipContent>
+          </Tooltip>
           <ThemeToggle className="text-muted-foreground" />
           <Button
             variant="ghost"
             size="sm"
             className="text-muted-foreground"
-            onClick={() => void supabase.auth.signOut()}
+            onClick={() => void signOut()}
           >
             Sign out
           </Button>
         </div>
       </header>
+
+      {asking && !privateUnlocked && (
+        <div className="mt-6 rounded-lg border p-4">
+          <p className="mb-3 text-sm text-muted-foreground">
+            Type your master password to show private books. They hide again
+            after fifteen minutes without you.
+          </p>
+          <UnlockPrivate
+            onDone={() => setAsking(false)}
+            onCancel={() => setAsking(false)}
+          />
+        </div>
+      )}
 
       <div className="mt-10 flex items-center justify-between sm:mt-12">
         <h2 className="text-xs uppercase tracking-widest text-muted-foreground">
@@ -116,8 +184,16 @@ export function Library({ userId, email }: { userId: string; email: string }) {
                     className="w-full rounded-md px-1 py-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     onClick={() => navigate(`/b/${book.id}`)}
                   >
-                    <span className="block truncate font-prose text-lg">
-                      {book.title || "Untitled"}
+                    <span className="flex items-center gap-1.5">
+                      <span className="min-w-0 truncate font-prose text-lg">
+                        {book.title || "Untitled"}
+                      </span>
+                      {book.isPrivate && (
+                        <Lock
+                          className="size-3 shrink-0 text-muted-foreground"
+                          aria-label="Private"
+                        />
+                      )}
                     </span>
                     <span className="mt-0.5 block text-xs text-muted-foreground">
                       Edited {formatWhen(book.updated_at)}
@@ -125,6 +201,25 @@ export function Library({ userId, email }: { userId: string; email: string }) {
                   </button>
                 </ContextMenuTrigger>
                 <ContextMenuContent>
+                  {/* Only offered while the private key is in hand — moving a
+                      book needs both keys, and an item that could only ever
+                      fail is worse than no item. */}
+                  {privateUnlocked &&
+                    (book.isPrivate ? (
+                      <ContextMenuItem
+                        onSelect={() => void onSetPrivate(book, false)}
+                      >
+                        <LockOpen className="size-4" />
+                        Make ordinary
+                      </ContextMenuItem>
+                    ) : (
+                      <ContextMenuItem
+                        onSelect={() => void onSetPrivate(book, true)}
+                      >
+                        <Lock className="size-4" />
+                        Make private
+                      </ContextMenuItem>
+                    ))}
                   <ContextMenuItem onSelect={() => void onArchive(book)}>
                     <Archive className="size-4" />
                     Archive

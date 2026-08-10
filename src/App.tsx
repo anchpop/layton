@@ -3,10 +3,13 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 
 import { useAuth, type AuthUser } from "@/hooks/useAuth";
 import { usePasskeyGate } from "@/hooks/usePasskeyGate";
+import { useVault } from "@/hooks/useVault";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { Auth } from "@/components/Auth";
 import { Library } from "@/components/Library";
 import { PasskeySetup } from "@/components/PasskeySetup";
+import { VaultSetup } from "@/components/VaultSetup";
+import { VaultUnlock } from "@/components/VaultUnlock";
 import { ChunkBoundary } from "@/components/ChunkBoundary";
 import { UpdatePrompt } from "@/components/UpdatePrompt";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -43,7 +46,12 @@ export default function App() {
       ) : !user ? (
         <Auth />
       ) : (
-        <SignedIn user={user} offline={offline} />
+        // Keyed by account so a session replaced with another one gets a
+        // fresh subtree rather than the old one re-deriving itself. Every gate,
+        // every decrypted title and every sync engine below here belongs to
+        // exactly one account, and remounting is the only way to say that which
+        // cannot be got wrong by an effect running a render too late.
+        <SignedIn key={user.id} user={user} offline={offline} />
       )}
       </TooltipProvider>
     </ThemeProvider>
@@ -56,10 +64,31 @@ function SignedIn({ user, offline }: { user: AuthUser; offline: boolean }) {
   // needs the network, and nothing should stand between an offline writer and
   // their chapter.
   const passkeyGate = usePasskeyGate(offline ? null : userId);
+  const { gate: vault, recheck: recheckVault } = useVault(userId);
 
   // Ask once, immediately after a first sign-in, before the library appears.
   if (passkeyGate.state === "prompt") {
     return <PasskeySetup email={email} onDone={passkeyGate.resolve} />;
+  }
+
+  /**
+   * Nothing past this point can render without a key. Unlike the passkey gate
+   * above, this one cannot fail open: the library, the editor and the sync
+   * engine all read ciphertext, so letting them through unlocked would not show
+   * a degraded app — it would show an empty one.
+   */
+  if (vault === "checking") {
+    return (
+      <div className="flex min-h-full items-center justify-center">
+        <span className="text-sm text-muted-foreground">…</span>
+      </div>
+    );
+  }
+  if (vault === "setup") return <VaultSetup userId={userId} email={email} />;
+  if (vault === "locked") {
+    return (
+      <VaultUnlock userId={userId} email={email} onErased={recheckVault} />
+    );
   }
 
   return (

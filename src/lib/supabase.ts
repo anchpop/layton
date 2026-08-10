@@ -22,10 +22,16 @@ export const supabase = createClient(url, key, {
   },
 });
 
+/**
+ * `title_cipher` and `payload` are sealed envelopes, and `wrapped_key` is the
+ * book's key sealed under one of the account keys. Nothing the server holds is
+ * readable without a master password it never receives — see lib/vault.ts.
+ */
 export type BookRow = {
   id: string;
   owner_id: string;
-  title: string;
+  title_cipher: string;
+  wrapped_key: string;
   created_at: string;
   updated_at: string;
   archived_at: string | null;

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 
 import { supabase } from "../lib/supabase";
+import { forgetThisDevice } from "../lib/vault";
 
 export type AuthUser = { id: string; email: string };
 
@@ -120,6 +121,11 @@ export function useAuth(): AuthState {
         setOffline(false);
       } else if (event === "SIGNED_OUT") {
         rememberUser(null);
+        // Signing out takes the key with it. The cached books stay in
+        // IndexedDB, which is fine precisely because they are sealed — without
+        // the key this browser cannot read a word of them, and the next sign-in
+        // asks for the master password to get it back.
+        void forgetThisDevice();
         setSession(null);
         setUser(null);
         setOffline(false);
