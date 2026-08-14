@@ -5,7 +5,7 @@ import { toast } from "sonner";
 
 import { useLibrary, type LibraryBook } from "@/hooks/useLibrary";
 import { useVaultStatus } from "@/hooks/useVault";
-import { lockPrivate, signOut } from "@/lib/vault";
+import { lockPrivate } from "@/lib/vault";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -20,7 +20,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { ThemeToggle } from "./ThemeToggle";
-import { PasskeyPanel } from "./PasskeyPanel";
+import { AccountDialog } from "./AccountDialog";
 import { UnlockPrivate } from "./UnlockPrivate";
 
 function formatWhen(iso: string): string {
@@ -83,9 +83,7 @@ export function Library({ userId, email }: { userId: string; email: string }) {
       <header className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="font-prose text-2xl tracking-tight">Layton</h1>
         <div className="flex items-center gap-1 text-xs">
-          <span className="hidden text-muted-foreground sm:inline">
-            {email}
-          </span>
+          <AccountDialog email={email} />
           {/*
             One control, two jobs, and deliberately always present. When the
             key is put away it asks for it; when the key is held it takes it
@@ -123,14 +121,6 @@ export function Library({ userId, email }: { userId: string; email: string }) {
             </TooltipContent>
           </Tooltip>
           <ThemeToggle className="text-muted-foreground" />
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-muted-foreground"
-            onClick={() => void signOut()}
-          >
-            Sign out
-          </Button>
         </div>
       </header>
 
@@ -230,8 +220,6 @@ export function Library({ userId, email }: { userId: string; email: string }) {
           ))}
         </ul>
       )}
-
-      <PasskeyPanel />
     </div>
   );
 }

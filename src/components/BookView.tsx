@@ -34,6 +34,8 @@ import { ChapterList } from "./ChapterList";
 import { SyncBadge } from "./SyncBadge";
 import { ThemeToggle } from "./ThemeToggle";
 import { UnlockPrivate } from "./UnlockPrivate";
+import { BookPrivacy } from "./BookPrivacy";
+import { BookSharing } from "./BookSharing";
 
 /**
  * A private book, reached while its key is put away — by the idle timer, by the
@@ -329,6 +331,7 @@ function BookWorkspace({
             aria-label="Book title"
             className="h-auto border-0 bg-transparent px-2 py-1 font-prose !text-lg shadow-none focus-visible:ring-0 dark:bg-transparent"
           />
+
         </SidebarHeader>
 
         <SidebarContent>
@@ -343,11 +346,22 @@ function BookWorkspace({
         </SidebarContent>
 
         <SidebarFooter
-          className="flex-row items-center justify-between border-t px-3 py-2 text-[0.7rem] text-muted-foreground"
+          className="gap-1 border-t px-3 py-2 text-[0.7rem] text-muted-foreground"
           style={{ paddingBottom: `calc(0.5rem + ${SAFE_BOTTOM})` }}
         >
-          <span>{words.toLocaleString()} words</span>
-          <SyncBadge state={syncState} />
+          {/* Only once the book is genuinely open. While it is still resolving
+              a key there is nothing to say about it, and offering to change
+              something we have not finished reading would be a guess. */}
+          {sync && syncState.status !== "loading" && (
+            <>
+              <BookSharing sync={sync} />
+              <BookPrivacy sync={sync} isPrivate={syncState.isPrivate} />
+            </>
+          )}
+          <div className="flex items-center justify-between">
+            <span>{words.toLocaleString()} words</span>
+            <SyncBadge state={syncState} />
+          </div>
         </SidebarFooter>
       </Sidebar>
 

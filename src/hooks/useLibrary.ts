@@ -4,11 +4,10 @@ import { supabase, type BookRow } from "../lib/supabase";
 import { sealText, unsealText } from "../lib/crypto";
 import {
   createBookKey,
+  moveBookPrivacy,
   openBookKey,
-  rewrapBookKey,
   status as vaultStatus,
 } from "../lib/vault";
-import { updateLocalWrappedKey } from "../lib/localStore";
 import { useVaultStatus } from "./useVault";
 
 /** A book this browser can actually read. Nothing else is representable. */
@@ -133,20 +132,15 @@ export function useLibrary(userId: string | null) {
   const setPrivate = useCallback(
     async (book: LibraryBook, isPrivate: boolean) => {
       try {
-        const rewrapped = await rewrapBookKey(book.wrappedKey, isPrivate);
-        const { error: err } = await supabase
-          .from("books")
-          .update({ wrapped_key: rewrapped })
-          .eq("id", book.id);
-        if (err) {
-          setError(err.message);
-          return false;
-        }
-        // Reclassified the moment the server agrees, before the cache write and
-        // before any refresh. The render-time filter hides a book by its
-        // isPrivate flag, so anything that fails or merely takes a while in
-        // between would leave a newly private title classified as ordinary —
-        // and still on screen after the next lock.
+        const rewrapped = await moveBookPrivacy(
+          book.id,
+          book.wrappedKey,
+          isPrivate,
+        );
+        // Reclassified as soon as the move lands, rather than left to the
+        // refresh below. The render-time filter hides a book by its isPrivate
+        // flag, so a refresh that failed would leave a newly private title
+        // classified as ordinary — and still on screen after the next lock.
         setBooks((current) =>
           current.map((entry) =>
             entry.id === book.id
@@ -154,7 +148,6 @@ export function useLibrary(userId: string | null) {
               : entry,
           ),
         );
-        await updateLocalWrappedKey(book.id, rewrapped);
         await refresh();
         return true;
       } catch (err) {

@@ -210,6 +210,15 @@
   }
 }
 
+/* The shared-story page reads with the same typesetting it was written in,
+   minus the editor's affordances: the 45vh runway below the caret becomes an
+   ordinary page bottom, and the page's own header supplies the space above. */
+.prose-surface.reading {
+  padding-top: 2rem;
+  padding-bottom: 8rem;
+  min-height: 0;
+}
+
 .prose-surface p {
   margin: 0;
   text-indent: 1.5em;

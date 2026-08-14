@@ -121,10 +121,7 @@ export function VaultSetup({
             <span className="text-foreground">
               If you forget it, your books are gone.
             </span>{" "}
-            Nobody can reset it and no support request can recover it, because
-            no copy of the key exists outside this password. That is the same
-            fact as “the server cannot read your writing”, said from the other
-            side.
+            Nobody can reset it and no support request can recover it.
             <label className="mt-4 flex items-start gap-2.5 text-foreground">
               <input
                 type="checkbox"

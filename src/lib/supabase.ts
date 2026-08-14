@@ -45,3 +45,19 @@ export type BookUpdateRow = {
   payload: string;
   created_at: string;
 };
+
+/**
+ * A frozen, shareable copy of a book. `payload` is the rendered story sealed
+ * under a key that exists only in the share link's fragment; `wrapped_key` is
+ * that key sealed under the book's key, so the owner can re-show the link.
+ * Anonymous readers reach `payload` alone, through shared_book_payload().
+ */
+export type SharedBookRow = {
+  id: string;
+  owner_id: string;
+  book_id: string;
+  payload: string;
+  wrapped_key: string;
+  created_at: string;
+  updated_at: string;
+};

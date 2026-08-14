@@ -30,6 +30,10 @@ being able to read a word of it.
 - **Private books.** Mark a book private and it vanishes from the library
   fifteen minutes after you stop writing, or the moment you press the lock. A
   locked library gives no sign that private books exist at all.
+- **Share a copy by link.** One link, readable by anyone who holds it, no
+  account needed. The copy is frozen at the moment you cut the link, encrypted
+  under a key that travels only in the URL fragment — the part after the `#`
+  that browsers never send — so the server cannot read what it is serving.
 
 ## Architecture
 
@@ -151,6 +155,12 @@ redact, and no `if (!book.isPrivate)` that a future refactor can drop. A private
 book fails at exactly the point a corrupted row would, and is dropped in exactly
 the same silence: no placeholder, no "2 hidden", nothing to notice.
 
+You mark a book private from its own sidebar, under the title — it is a
+property of that book, like its name. The library's context menu offers the
+same move for when you are looking at all of them at once. Either way it needs
+the private key, and both places fold asking for the master password into the
+same gesture rather than sending you elsewhere to unlock first.
+
 The lock control in the library header is always visible, whether or not the
 account has any private books. Hiding it would be the tell.
 
@@ -181,6 +191,44 @@ applied to them would be a cost with no benefit.
 Signing out forgets the device key. The cached books stay in IndexedDB, which is
 safe precisely because they are sealed; the next sign-in asks for the master
 password to get the key back.
+
+### Sharing a story
+
+Sharing hands someone a book without handing them an account, and without
+handing the server a single readable word. From the book's sidebar: *Share a
+copy* mints a link like
+
+```
+https://layton.space/s/<uuid>#<key>
+```
+
+Everything about the mechanism is in that shape. The uuid names a row in
+`shared_books`; the key after the `#` decrypts it, and a URL fragment is never
+sent by the browser — not to Layton's host, not to Supabase, not into server
+logs. The page fetches ciphertext and decrypts it locally, so a shared story is
+exactly as opaque to the server as the book it came from. Revoking the link
+deletes the row; the owner's copies of old links are kept re-showable by
+sealing each share's key under the book's own key.
+
+Three decisions worth writing down:
+
+- **A share is a copy, not a window.** The payload is set when the link is cut
+  and changes only when the author pushes an update to it — same link, same
+  key, new words. Nothing a reader holds ever shows keystrokes as they happen;
+  "anyone with the link can read my drafts as I write them" is a different
+  feature, deliberately not this one.
+- **The copy is the book *rendered*, never the CRDT.** A Loro snapshot is the
+  history: every deleted paragraph and discarded phrasing, recoverable by
+  anyone with a debugger. What was written and unwritten was never offered to
+  the reader, so the export walks the current state into plain ProseMirror
+  JSON. A side effect is that the reader page needs no CRDT engine — it loads
+  a few kilobytes, not Loro's three-megabyte wasm.
+- **The public can fetch one row, not list any.** `shared_books` has no
+  anonymous SELECT policy; readers go through a `security definer` function
+  that takes an id and returns the payload column alone. Every payload is
+  ciphertext, but serving the world a listable table of who shared how much,
+  when, is not the same thing as serving one row to someone who was handed its
+  unguessable id.
 
 ### What the server still sees
 
@@ -336,6 +384,8 @@ src/
   lib/
     book.ts        Loro document schema + chapter operations
     sync.ts        the sync engine (watermark, outbox, compaction, sealing)
+    share.ts       reading a shared story: fragment key, fetch, unseal. No Loro
+    sharePublish.ts  making one: render, seal, publish, list, revoke
     localStore.ts  IndexedDB sealed-snapshot cache, outbox, and device key
     crypto.ts      the sealed envelope and the key derivations. All WebCrypto
     vault.ts       which keys are held, how they are got, and when they go
@@ -347,7 +397,7 @@ src/
                    gate, and CRDT-to-React subscriptions
   components/      Auth, PasskeySetup, PasskeyPanel, VaultSetup, VaultUnlock,
                    UnlockPrivate, Library, BookView, ChapterList, Editor,
-                   UpdatePrompt
+                   BookSharing, SharedStory (the public reader), UpdatePrompt
     ui/            shadcn components (owned, edited in place)
 supabase/migrations/
 ```

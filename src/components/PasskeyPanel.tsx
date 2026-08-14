@@ -14,7 +14,7 @@ import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 
 /**
- * Passkey management, tucked below the library.
+ * Passkey management, inside the account dialog.
  *
  * Collapsed by default — most of the time you are here to write, not to
  * administer credentials. It opens itself when the account has none and the
@@ -68,7 +68,7 @@ export function PasskeyPanel() {
   const count = keys?.length ?? 0;
 
   return (
-    <section className="mt-16">
+    <section>
       <Separator />
       <button
         type="button"

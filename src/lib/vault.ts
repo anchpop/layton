@@ -14,6 +14,7 @@ import {
   deleteLocalBook,
   forgetDeviceKey,
   forgetVaultRecord,
+  updateLocalWrappedKey,
   loadDeviceKey,
   loadVaultRecord,
   saveDeviceKey,
@@ -145,10 +146,15 @@ export async function lookupVault(userId: string): Promise<VaultLookup> {
   return cached ? { kind: "found", record: cached } : { kind: "unavailable" };
 }
 
-async function unwrapBoth(
+/**
+ * The account keys as raw bytes. Only two callers can want these: importing
+ * them into non-extractable CryptoKeys, and re-sealing them under a new
+ * password. Everything else takes the CryptoKeys.
+ */
+async function unwrapRaw(
   record: VaultRecord,
   passphrase: string,
-): Promise<{ everyday: CryptoKey; secret: CryptoKey }> {
+): Promise<{ everydayRaw: Uint8Array; secretRaw: Uint8Array }> {
   const masterKey = await deriveMasterKey(
     passphrase,
     base64ToBytes(record.salt),
@@ -164,7 +170,14 @@ async function unwrapBoth(
     masterKey,
     base64ToBytes(record.wrappedPrivateKey),
   );
+  return { everydayRaw, secretRaw };
+}
 
+async function unwrapBoth(
+  record: VaultRecord,
+  passphrase: string,
+): Promise<{ everyday: CryptoKey; secret: CryptoKey }> {
+  const { everydayRaw, secretRaw } = await unwrapRaw(record, passphrase);
   const everyday = await importContentKey(everydayRaw);
   const secret = await importContentKey(secretRaw);
   // The keys are imported and non-extractable now; the loose copies are not
@@ -172,6 +185,86 @@ async function unwrapBoth(
   everydayRaw.fill(0);
   secretRaw.fill(0);
   return { everyday, secret };
+}
+
+/**
+ * Seal two account keys under a password. Always a fresh salt, and always the
+ * iteration count this build ships — so changing a password is also how an
+ * account picks up a stronger KDF than the one it was created with.
+ */
+async function sealAccountKeys(
+  userId: string,
+  passphrase: string,
+  everydayRaw: Uint8Array,
+  secretRaw: Uint8Array,
+): Promise<VaultRecord> {
+  const salt = randomSalt();
+  const masterKey = await deriveMasterKey(passphrase, salt, KDF_ITERATIONS);
+  return {
+    userId,
+    salt: bytesToBase64(salt),
+    iterations: KDF_ITERATIONS,
+    wrappedKey: bytesToBase64(await seal(masterKey, everydayRaw)),
+    wrappedPrivateKey: bytesToBase64(await seal(masterKey, secretRaw)),
+  };
+}
+
+/**
+ * Change the master password, everywhere, from any one device.
+ *
+ * It is one row. The password only ever wraps the two account keys, and those
+ * are untouched — so no book key is re-derived, no chapter is re-encrypted,
+ * and the update log is not rewritten by a single byte. `user_keys` is the
+ * only place the old password could still open anything, so overwriting it
+ * retires that password globally the moment it lands.
+ *
+ * What this does NOT do is evict devices. A device that already unlocked holds
+ * the everyday key itself, not the password, so it keeps working — which is
+ * right when you are strengthening a password and wrong if you are responding
+ * to a stolen laptop. Kicking every device off means rotating the account keys
+ * and rewrapping each book's key under the new ones; cheap, since book keys are
+ * wrapped rather than derived, but a different operation from this one.
+ */
+export async function changePassphrase(
+  currentPassphrase: string,
+  nextPassphrase: string,
+): Promise<void> {
+  const userId = currentUserId;
+  if (!userId) throw new Error("Not signed in.");
+
+  const lookup = await lookupVault(userId);
+  if (lookup.kind !== "found") {
+    throw new Error("Could not reach your key record.");
+  }
+
+  const { everydayRaw, secretRaw } = await unwrapRaw(
+    lookup.record,
+    currentPassphrase,
+  );
+  const record = await sealAccountKeys(
+    userId,
+    nextPassphrase,
+    everydayRaw,
+    secretRaw,
+  );
+  everydayRaw.fill(0);
+  secretRaw.fill(0);
+
+  // The server first. If it refuses, nothing has changed anywhere, and the old
+  // password is still the one that works — caching the new blob before knowing
+  // that would strand this device on a password no other device agrees with.
+  const { error } = await supabase
+    .from("user_keys")
+    .update({
+      salt: record.salt,
+      iterations: record.iterations,
+      wrapped_key: record.wrappedKey,
+      wrapped_private_key: record.wrappedPrivateKey,
+    })
+    .eq("user_id", userId);
+  if (error) throw error;
+
+  await saveVaultRecord(record);
 }
 
 // ---------------------------------------------------------------------------
@@ -216,18 +309,14 @@ export async function createVault(
   userId: string,
   passphrase: string,
 ): Promise<void> {
-  const salt = randomSalt();
-  const masterKey = await deriveMasterKey(passphrase, salt, KDF_ITERATIONS);
   const everydayRaw = randomKeyBytes();
   const secretRaw = randomKeyBytes();
-
-  const record: VaultRecord = {
+  const record = await sealAccountKeys(
     userId,
-    salt: bytesToBase64(salt),
-    iterations: KDF_ITERATIONS,
-    wrappedKey: bytesToBase64(await seal(masterKey, everydayRaw)),
-    wrappedPrivateKey: bytesToBase64(await seal(masterKey, secretRaw)),
-  };
+    passphrase,
+    everydayRaw,
+    secretRaw,
+  );
 
   const { error } = await supabase.from("user_keys").insert({
     user_id: userId,
@@ -430,6 +519,29 @@ export async function rewrapBookKey(
   if (!raw) throw new Error("Could not open that book's key.");
   const rewrapped = bytesToBase64(await seal(to, raw));
   raw.fill(0);
+  return rewrapped;
+}
+
+/**
+ * Move a book between ordinary and private, everywhere that records it.
+ *
+ * Shared by the library and the editor because they offer the same act from
+ * two places, and the three writes it takes — rewrap, row, local cache — have
+ * to stay together. Two copies of this would drift the moment one of them
+ * learned something the other did not.
+ */
+export async function moveBookPrivacy(
+  bookId: string,
+  wrapped: string,
+  isPrivate: boolean,
+): Promise<string> {
+  const rewrapped = await rewrapBookKey(wrapped, isPrivate);
+  const { error } = await supabase
+    .from("books")
+    .update({ wrapped_key: rewrapped })
+    .eq("id", bookId);
+  if (error) throw error;
+  await updateLocalWrappedKey(bookId, rewrapped);
   return rewrapped;
 }
 

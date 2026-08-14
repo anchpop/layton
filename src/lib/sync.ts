@@ -4,8 +4,15 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supabase, type BookUpdateRow } from "./supabase";
 import { base64ToBytes, bytesToBase64 } from "./bytes";
 import { seal, sealText, unseal } from "./crypto";
-import { openBookKey } from "./vault";
+import { moveBookPrivacy, openBookKey } from "./vault";
 import { getTitle } from "./book";
+import {
+  listShares,
+  publishShare,
+  revokeShare,
+  updateShare,
+  type ShareLink,
+} from "./sharePublish";
 import {
   clearOutboxEntries,
   enqueueOutbox,
@@ -634,6 +641,48 @@ export class BookSync {
     } catch (err) {
       console.warn("Compaction skipped", err);
     }
+  }
+
+  /**
+   * Make this book private, or ordinary again, from inside the book itself.
+   *
+   * The engine is where this belongs: it already holds the wrapper and already
+   * owns keeping it current, so the sidebar does not have to fetch a row it
+   * isn't otherwise reading just to change one column of it.
+   */
+  async setPrivate(isPrivate: boolean): Promise<void> {
+    if (!this.wrappedKey) throw new Error("This book is not open.");
+    this.wrappedKey = await moveBookPrivacy(
+      this.bookId,
+      this.wrappedKey,
+      isPrivate,
+    );
+    this.setState({ isPrivate });
+  }
+
+  /**
+   * Sharing lives on the engine for the same reason setPrivate does: it needs
+   * the open document and the book's key together, and this is the only place
+   * that holds both. The mechanics are in lib/sharePublish.ts.
+   */
+  async shareCopy(): Promise<ShareLink> {
+    if (!this.key) throw new Error("This book is not open.");
+    return publishShare(this.doc, this.bookId, this.ownerId, this.key);
+  }
+
+  /** Push today's story to an existing link; the link itself never changes. */
+  async updateShareLink(id: string): Promise<string> {
+    if (!this.key) throw new Error("This book is not open.");
+    return updateShare(this.doc, id, this.key);
+  }
+
+  async listShareLinks(): Promise<ShareLink[]> {
+    if (!this.key) throw new Error("This book is not open.");
+    return listShares(this.bookId, this.key);
+  }
+
+  async revokeShareLink(id: string): Promise<void> {
+    return revokeShare(id);
   }
 
   /** Mirror the in-document title onto the books row that the library lists. */

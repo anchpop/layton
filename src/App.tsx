@@ -21,6 +21,12 @@ import { Toaster } from "@/components/ui/sonner";
 const BookView = lazy(() =>
   import("@/components/BookView").then((m) => ({ default: m.BookView })),
 );
+// The shared-story reader is public and prose-only — no Loro, no vault — so a
+// link opened by someone who has never signed in loads a small chunk, not the
+// editor.
+const SharedStory = lazy(() =>
+  import("@/components/SharedStory").then((m) => ({ default: m.SharedStory })),
+);
 
 export default function App() {
   const { user, loading, offline } = useAuth();
@@ -39,20 +45,51 @@ export default function App() {
           bottom: "calc(1rem + env(safe-area-inset-bottom, 0px))",
         }}
       />
-      {loading ? (
-        <div className="flex min-h-full items-center justify-center">
-          <span className="text-sm text-muted-foreground">…</span>
-        </div>
-      ) : !user ? (
-        <Auth />
-      ) : (
-        // Keyed by account so a session replaced with another one gets a
-        // fresh subtree rather than the old one re-deriving itself. Every gate,
-        // every decrypted title and every sync engine below here belongs to
-        // exactly one account, and remounting is the only way to say that which
-        // cannot be got wrong by an effect running a render too late.
-        <SignedIn key={user.id} user={user} offline={offline} />
-      )}
+      <BrowserRouter>
+        <Routes>
+          {/* A shared story answers to its link alone. It sits outside the
+              auth branch because its reader has no account here — the story's
+              key arrives in the URL fragment, not from any vault. */}
+          <Route
+            path="/s/:shareId"
+            element={
+              <ChunkBoundary>
+                <Suspense
+                  fallback={
+                    <div className="flex min-h-full items-center justify-center">
+                      <span className="text-sm text-muted-foreground">
+                        Opening…
+                      </span>
+                    </div>
+                  }
+                >
+                  <SharedStory />
+                </Suspense>
+              </ChunkBoundary>
+            }
+          />
+          <Route
+            path="/*"
+            element={
+              loading ? (
+                <div className="flex min-h-full items-center justify-center">
+                  <span className="text-sm text-muted-foreground">…</span>
+                </div>
+              ) : !user ? (
+                <Auth />
+              ) : (
+                // Keyed by account so a session replaced with another one gets
+                // a fresh subtree rather than the old one re-deriving itself.
+                // Every gate, every decrypted title and every sync engine below
+                // here belongs to exactly one account, and remounting is the
+                // only way to say that which cannot be got wrong by an effect
+                // running a render too late.
+                <SignedIn key={user.id} user={user} offline={offline} />
+              )
+            }
+          />
+        </Routes>
+      </BrowserRouter>
       </TooltipProvider>
     </ThemeProvider>
   );
@@ -91,30 +128,31 @@ function SignedIn({ user, offline }: { user: AuthUser; offline: boolean }) {
     );
   }
 
+  // Descendant routes of the catch-all in App: the router is mounted up there,
+  // outside the auth branch, so the shared-story page can exist without a
+  // session. Everything signed-in resolves here.
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<Library userId={userId} email={email} />} />
-        <Route
-          path="/b/:bookId"
-          element={
-            <ChunkBoundary>
-              <Suspense
-                fallback={
-                  <div className="flex h-full items-center justify-center">
-                    <span className="text-sm text-muted-foreground">
-                      Opening…
-                    </span>
-                  </div>
-                }
-              >
-                <BookView userId={userId} />
-              </Suspense>
-            </ChunkBoundary>
-          }
-        />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </BrowserRouter>
+    <Routes>
+      <Route path="/" element={<Library userId={userId} email={email} />} />
+      <Route
+        path="/b/:bookId"
+        element={
+          <ChunkBoundary>
+            <Suspense
+              fallback={
+                <div className="flex h-full items-center justify-center">
+                  <span className="text-sm text-muted-foreground">
+                    Opening…
+                  </span>
+                </div>
+              }
+            >
+              <BookView userId={userId} />
+            </Suspense>
+          </ChunkBoundary>
+        }
+      />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   );
 }

@@ -43,7 +43,11 @@ export function UnlockPrivate({
 
   return (
     <form onSubmit={onSubmit} className={cn("w-full", className)}>
-      <div className="flex items-center gap-2">
+      {/* Wraps rather than branching on where it is used. The library gives
+          this the full width of the page and it stays one row; the book
+          sidebar is a fraction of that, and the buttons drop underneath on
+          their own. */}
+      <div className="flex flex-wrap items-center gap-2">
         <Input
           type="password"
           required
@@ -52,6 +56,7 @@ export function UnlockPrivate({
           placeholder="Master password"
           aria-label="Master password"
           value={passphrase}
+          className="min-w-32 flex-1"
           onChange={(e) => setPassphrase(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Escape") onCancel?.();

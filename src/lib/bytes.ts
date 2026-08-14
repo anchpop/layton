@@ -23,3 +23,21 @@ export function base64ToBytes(b64: string): Uint8Array {
   for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
   return out;
 }
+
+/**
+ * The URL-safe alphabet, for a key that rides in a link's fragment. Standard
+ * base64's `+` and `/` survive a fragment technically, but not a paste into
+ * every chat client that decides where a URL ends — and `=` padding is pure
+ * bait for a trailing-punctuation trimmer.
+ */
+export function bytesToBase64Url(bytes: Uint8Array): string {
+  return bytesToBase64(bytes)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
+}
+
+export function base64UrlToBytes(b64url: string): Uint8Array {
+  const b64 = b64url.replaceAll("-", "+").replaceAll("_", "/");
+  return base64ToBytes(b64.padEnd(Math.ceil(b64.length / 4) * 4, "="));
+}
