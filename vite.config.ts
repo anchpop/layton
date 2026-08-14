@@ -72,7 +72,7 @@ export default defineConfig({
         name: "Layton",
         short_name: "Layton",
         description:
-          "A quiet, offline-first place to write fiction, synced to your account.",
+          "An offline-first place to write fiction.",
         start_url: "/",
         scope: "/",
         display: "standalone",
