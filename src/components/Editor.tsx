@@ -20,12 +20,19 @@ import type { LoroDoc } from "loro-crdt";
 import type { ContainerID } from "loro-crdt";
 
 import { schema } from "../lib/schema";
+import { aiPendingNodeView } from "../lib/autocomplete";
 
 type Props = {
   doc: LoroDoc;
   containerId: ContainerID;
   /** Remount key: switching chapters must rebuild the view against a new container. */
   chapterId: string;
+  /**
+   * Hands the live EditorView to whoever mounted us (and null when it dies),
+   * so chrome outside the editor — the continue-with-AI button — can read the
+   * caret and dispatch. Must be referentially stable or the editor rebuilds.
+   */
+  onViewReady?: (view: EditorView | null) => void;
 };
 
 /** Typographic niceties that matter for prose. */
@@ -59,7 +66,7 @@ function fictionInputRules() {
   });
 }
 
-export function Editor({ doc, containerId, chapterId }: Props) {
+export function Editor({ doc, containerId, chapterId, onViewReady }: Props) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
 
@@ -99,8 +106,14 @@ export function Editor({ doc, containerId, chapterId }: Props) {
         class: "prose-surface",
         spellcheck: "true",
       },
+      nodeViews: {
+        // Pending AI markers paint their live status ("loading weights, 42%")
+        // from a local store, so none of that chatter enters the document.
+        ai_pending: (node) => aiPendingNodeView(node),
+      },
     });
     viewRef.current = view;
+    onViewReady?.(view);
 
     // Take focus only if nothing else wants it. Creating a chapter puts the
     // caret in the sidebar's rename field and mounts this editor in the same
@@ -109,10 +122,11 @@ export function Editor({ doc, containerId, chapterId }: Props) {
     if (!active || active === document.body) view.focus();
 
     return () => {
+      onViewReady?.(null);
       view.destroy();
       viewRef.current = null;
     };
-  }, [doc, containerId, chapterId]);
+  }, [doc, containerId, chapterId, onViewReady]);
 
   return <div ref={mountRef} className="editor-mount" />;
 }

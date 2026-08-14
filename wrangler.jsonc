@@ -5,12 +5,23 @@
   // Canonical origin. Passkeys are pinned to a single WebAuthn rp_id, so this
   // host is the one that can sign you in with Face ID / Touch ID.
   "routes": [{ "pattern": "layton.space", "custom_domain": true }],
+  // The Worker exists for exactly one route: /api/* (the LLM continuation
+  // proxy — see worker/index.ts). Everything else is a static SPA talking
+  // directly to Supabase, and run_worker_first keeps it that way: only /api/*
+  // invokes the script, every other path is served from assets as before.
+  "main": "worker/index.ts",
   "assets": {
-    // The whole app is a static SPA talking directly to Supabase, so there is
-    // no Worker script here — Cloudflare just serves the build and routes every
-    // unknown path back to index.html for client-side routing.
     "directory": "./dist",
-    "not_found_handling": "single-page-application"
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "vars": {
+    // Where the vLLM server lives. Its bearer key is a secret (VLLM_API_KEY,
+    // via `wrangler secret put`), not a var.
+    "MODAL_URL": "https://anchpop--llama-405b-base-serve.modal.run",
+    // Public by design — the same values the browser bundle ships with.
+    "SUPABASE_URL": "https://agrlfgtcdylmbzoglpww.supabase.co",
+    "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_q5IyiwBfH694ixqFc4nTRA_dDQphH7A"
   },
   "observability": {
     "enabled": true

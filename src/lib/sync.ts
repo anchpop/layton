@@ -3,7 +3,7 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 
 import { supabase, type BookUpdateRow } from "./supabase";
 import { base64ToBytes, bytesToBase64 } from "./bytes";
-import { seal, sealText, unseal } from "./crypto";
+import { seal, sealText, tryUnseal, unseal } from "./crypto";
 import { moveBookPrivacy, openBookKey } from "./vault";
 import { getTitle } from "./book";
 import {
@@ -683,6 +683,25 @@ export class BookSync {
 
   async revokeShareLink(id: string): Promise<void> {
     return revokeShare(id);
+  }
+
+  /**
+   * Seal small key material under the book's key, and open it again.
+   *
+   * For the AI continuation markers (lib/autocomplete.ts): a pending
+   * generation's response key rides inside the document wrapped this way, so
+   * any device that can open the book can collect the finished text — and
+   * nothing else can.
+   */
+  async sealBytesForBook(bytes: Uint8Array): Promise<string> {
+    if (!this.key) throw new Error("This book is not open.");
+    return bytesToBase64(await seal(this.key, bytes));
+  }
+
+  /** Null when the wrapped bytes are damaged or belong to another book. */
+  async openBytesForBook(wrapped: string): Promise<Uint8Array | null> {
+    if (!this.key) return null;
+    return tryUnseal(this.key, base64ToBytes(wrapped));
   }
 
   /** Mirror the in-document title onto the books row that the library lists. */

@@ -180,4 +180,44 @@ export function bookWordCount(doc: LoroDoc): number {
   return countWords(bodiesMap(doc).toJSON());
 }
 
+/**
+ * The chapter's prose as plain text — blocks separated by blank lines, scene
+ * breaks as the same `* * *` you'd type to make one. This is for building the
+ * AI continuation prompt, so ordinary readable text is the goal, not
+ * round-trippable structure.
+ */
+export function chapterText(doc: LoroDoc, chapterId: string): string {
+  const body = bodiesMap(doc).get(chapterId);
+  if (!(body instanceof LoroMap)) return "";
+  return textOf(body.toJSON());
+}
+
+const BLOCK_NODES = new Set(["paragraph", "heading", "blockquote", "scene_break"]);
+
+function textOf(node: unknown): string {
+  if (node == null) return "";
+  if (typeof node === "string") return node;
+  if (Array.isArray(node)) {
+    const isBlocks = node.some(
+      (child) =>
+        typeof child === "object" &&
+        child !== null &&
+        BLOCK_NODES.has((child as Record<string, unknown>).nodeName as string),
+    );
+    const parts = node.map(textOf);
+    return isBlocks ? parts.filter(Boolean).join("\n\n") : parts.join("");
+  }
+  if (typeof node === "object") {
+    const record = node as Record<string, unknown>;
+    if (record.nodeName === "scene_break") return "* * *";
+    let out = "";
+    for (const [key, value] of Object.entries(record)) {
+      if (key === "nodeName" || key === "attributes") continue;
+      out += textOf(value);
+    }
+    return out;
+  }
+  return "";
+}
+
 export { LoroDoc, LoroList, LoroMap, LoroMovableList };

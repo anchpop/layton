@@ -91,6 +91,13 @@ export default defineConfig({
   resolve: {
     alias: { "@": path.resolve(__dirname, "./src") },
   },
+  server: {
+    // /api is the Worker's route (worker/index.ts), which Vite doesn't run —
+    // dev borrows the deployed one so the AI button works without wrangler.
+    proxy: {
+      "/api": { target: "https://layton.space", changeOrigin: true },
+    },
+  },
   build: {
     target: "es2022",
   },

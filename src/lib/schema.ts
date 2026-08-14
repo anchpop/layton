@@ -47,6 +47,37 @@ export const schema = new Schema({
       toDOM: () => ["blockquote", 0],
     },
 
+    /**
+     * A continuation the model is still writing (or finished while no tab was
+     * watching). It sits in the document — and therefore syncs, sealed, like
+     * any prose — carrying the generation's id and its response key wrapped
+     * under the book's key, so whichever device next opens the book can
+     * collect the finished text into this exact spot. Stripped from shares.
+     */
+    ai_pending: {
+      attrs: { gen: { default: "" }, key: { default: "" } },
+      group: "block",
+      atom: true,
+      selectable: true,
+      parseDOM: [
+        {
+          tag: "div[data-ai-pending]",
+          getAttrs: (el) => ({
+            gen: el.getAttribute("data-ai-pending") ?? "",
+            key: el.getAttribute("data-ai-key") ?? "",
+          }),
+        },
+      ],
+      toDOM: (node) => [
+        "div",
+        {
+          class: "ai-pending",
+          "data-ai-pending": node.attrs.gen as string,
+          "data-ai-key": node.attrs.key as string,
+        },
+      ],
+    },
+
     text: { group: "inline" },
   },
 
@@ -66,6 +97,18 @@ export const schema = new Schema({
         { style: "font-weight=bold" },
       ],
       toDOM: () => ["strong", 0],
+    },
+
+    /**
+     * Prose a model suggested rather than the writer typed, kept visibly
+     * washed until they own it. Not inclusive: typing at its edge is the
+     * writer's text again. Shared copies strip it — the annotation is for the
+     * author, not the audience (see sharePublish.ts).
+     */
+    ai: {
+      inclusive: false,
+      parseDOM: [{ tag: "span.ai" }],
+      toDOM: () => ["span", { class: "ai" }, 0],
     },
   },
 });

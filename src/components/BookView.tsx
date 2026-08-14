@@ -1,7 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
-import { ChevronLeft, Lock, Maximize2, Minimize2 } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronLeft,
+  Loader2,
+  Lock,
+  Maximize2,
+  Minimize2,
+  Sparkles,
+} from "lucide-react";
 import type { ContainerID } from "loro-crdt";
+import type { EditorView } from "prosemirror-view";
+import { toast } from "sonner";
 
 import {
   useBookSync,
@@ -28,6 +38,34 @@ import {
 } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  AI_LENGTHS,
+  ConnectionLost,
+  GenerationStopped,
+  StreamInserter,
+  placePendingMarker,
+  prepareContinuation,
+  promptBeforeCursor,
+  recoverPendingMarkers,
+  saveAiLength,
+  savedAiLength,
+  setPendingStatus,
+  streamContinuation,
+} from "@/lib/autocomplete";
 import { cn } from "@/lib/utils";
 import { Editor } from "./Editor";
 import { ChapterList } from "./ChapterList";
@@ -106,6 +144,13 @@ function BookUnavailable({ onBack }: { onBack: () => void }) {
  * plus a translucent status bar), so anything pinned to the top has to make
  * room for it or the controls end up under the clock.
  */
+/**
+ * Set once the writer has seen, and continued past, the note that AI
+ * continuations cannot be end-to-end encrypted. Local to the device on
+ * purpose: the server has no business keeping a record of who was told what.
+ */
+const AI_DISCLOSURE_KEY = "layton:ai-disclosure-seen";
+
 const SAFE_TOP = "env(safe-area-inset-top, 0px)";
 const SAFE_BOTTOM = "env(safe-area-inset-bottom, 0px)";
 // Landscape on a notched iPhone puts the sensor housing on one side.
@@ -222,6 +267,29 @@ function BookWorkspace({
   const title = useBookTitle(doc);
 
   const [activeId, setActiveId] = useState<string | null>(null);
+
+  // "Continue with AI" lives in the header, outside the editor, so the live
+  // view is handed up here for it to read the caret and insert through.
+  const editorViewRef = useRef<EditorView | null>(null);
+  const handleViewReady = useCallback((view: EditorView | null) => {
+    editorViewRef.current = view;
+  }, []);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiDisclosureOpen, setAiDisclosureOpen] = useState(false);
+  const [aiTokens, setAiTokens] = useState(savedAiLength);
+  /** Escape aborts the in-flight generation through this. */
+  const aiStopRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && aiStopRef.current) {
+        aiStopRef.current.abort();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const [titleDraft, setTitleDraft] = useState<string | null>(null);
   // Set by Escape. `setTitleDraft(null)` cannot do this job: blur() fires
   // synchronously and its handler still sees the pre-Escape draft, so the
@@ -245,6 +313,20 @@ function BookWorkspace({
     if (!doc || !activeId) return null;
     return bodyContainerId(doc, activeId);
   }, [doc, activeId, chapters.length]);
+
+  // A moment after a chapter opens, ask its pending AI markers whether their
+  // continuations finished while nobody was watching — collect the ones that
+  // did, clear the ones that expired, leave the ones still being written.
+  useEffect(() => {
+    if (!sync || !editorViewRef.current) return;
+    const id = setTimeout(() => {
+      const view = editorViewRef.current;
+      if (view) {
+        void recoverPendingMarkers(view, (w) => sync.openBytesForBook(w));
+      }
+    }, 800);
+    return () => clearTimeout(id);
+  }, [sync, activeId, syncState.status]);
 
   // Word count is derived from the CRDT on a gentle cadence rather than per
   // keystroke — it is ambient information, not a live readout.
@@ -271,6 +353,78 @@ function BookWorkspace({
   function selectChapter(id: string, { closePanel = true } = {}) {
     setActiveId(id);
     if (isMobile && closePanel) setOpenMobile(false);
+  }
+
+  /**
+   * Continue the story from the caret. The first press ever stops at a short
+   * disclosure — this is the one feature that sends prose out unsealed — and
+   * the accepting click comes back through here to actually run.
+   */
+  async function continueWithAi(attempt = 0) {
+    const view = editorViewRef.current;
+    if (!view || !doc || !activeId || !sync || (aiBusy && attempt === 0)) return;
+    if (!localStorage.getItem(AI_DISCLOSURE_KEY)) {
+      setAiDisclosureOpen(true);
+      return;
+    }
+    setAiBusy(true);
+    let inserter: StreamInserter | null = null;
+    let gen: string | null = null;
+    try {
+      const session = await prepareContinuation();
+      gen = session.gen;
+      const wrapped = await sync.sealBytesForBook(session.resKeyRaw);
+      session.resKeyRaw.fill(0);
+      // The prompt reads the caret, so capture it before the marker moves in.
+      const prompt = promptBeforeCursor(view, doc, activeId, title);
+      placePendingMarker(view, session.gen, wrapped);
+      inserter = new StreamInserter(view, session.gen);
+      const streaming = inserter;
+      const controller = new AbortController();
+      aiStopRef.current = controller;
+      await streamContinuation(
+        session,
+        prompt,
+        aiTokens,
+        (delta) => {
+          // Re-check the ref per chunk: if the chapter changed mid-stream, the
+          // old view is destroyed. The marker stays in the document, and the
+          // finished result is collected from the store next time it's opened.
+          if (editorViewRef.current === view) streaming.push(delta);
+        },
+        controller.signal,
+      );
+      if (editorViewRef.current === view) {
+        inserter.finish();
+        if (inserter.inserted === 0) {
+          // Sampling occasionally opens with an immediate stop; one quiet
+          // retry almost always draws a different first token.
+          if (attempt === 0) return continueWithAi(1);
+          toast("The model had nothing to add.");
+        }
+      }
+    } catch (err) {
+      if (err instanceof GenerationStopped) {
+        // Escape: keep what already streamed in, drop the marker so the
+        // server's stored copy is never collected. What's on the page stays.
+        if (editorViewRef.current === view) inserter?.finish();
+        toast("Stopped.");
+      } else if (err instanceof ConnectionLost) {
+        // The marker stays: the model is still writing server-side, and the
+        // stored result will fill this spot on a later visit.
+        if (gen) {
+          setPendingStatus(gen, "Connection lost — the model keeps writing.");
+        }
+      } else {
+        console.error("[ai] continue failed", err);
+        if (editorViewRef.current === view) inserter?.finish();
+        toast.error(
+          err instanceof Error ? err.message : "The model could not be reached.",
+        );
+      }
+    }
+    aiStopRef.current = null;
+    setAiBusy(false);
   }
 
   if (syncState.status === "unavailable") {
@@ -382,6 +536,60 @@ function BookWorkspace({
         >
           <SidebarTrigger className="text-muted-foreground" />
           <div className="flex-1" />
+          {doc && activeId && (
+            <div className="flex items-center">
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Continue with AI"
+                title="Continue with AI"
+                className="text-muted-foreground"
+                disabled={aiBusy}
+                onClick={() => void continueWithAi()}
+              >
+                {aiBusy ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Sparkles className="size-4" />
+                )}
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    aria-label="How much to write"
+                    title="How much to write"
+                    className="-ml-2 h-9 w-4 px-0 text-muted-foreground"
+                  >
+                    <ChevronDown className="size-3" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-52">
+                  <DropdownMenuRadioGroup
+                    value={String(aiTokens)}
+                    onValueChange={(value) => {
+                      const tokens = Number(value);
+                      setAiTokens(tokens);
+                      saveAiLength(tokens);
+                    }}
+                  >
+                    {AI_LENGTHS.map((length) => (
+                      <DropdownMenuRadioItem
+                        key={length.tokens}
+                        value={String(length.tokens)}
+                      >
+                        <span className="whitespace-nowrap">{length.label}</span>
+                        <span className="ml-auto whitespace-nowrap text-xs text-muted-foreground">
+                          {length.hint}
+                        </span>
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )}
           <ThemeToggle className="text-muted-foreground" />
           <Button
             variant="ghost"
@@ -402,7 +610,12 @@ function BookWorkspace({
         {/* SidebarInset already renders <main>; a nested one would be invalid. */}
         <div className="min-h-0 flex-1 overflow-y-auto">
           {doc && activeId && containerId ? (
-            <Editor doc={doc} containerId={containerId} chapterId={activeId} />
+            <Editor
+              doc={doc}
+              containerId={containerId}
+              chapterId={activeId}
+              onViewReady={handleViewReady}
+            />
           ) : (
             <div className="flex h-full items-center justify-center px-6">
               {syncState.status === "loading" ? (
@@ -428,6 +641,30 @@ function BookWorkspace({
           )}
         </div>
       </SidebarInset>
+
+      <Dialog open={aiDisclosureOpen} onOpenChange={setAiDisclosureOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Continue with AI</DialogTitle>
+            <DialogDescription>
+              The model has to read your text to continue it, so these requests
+              can&apos;t be end-to-end encrypted. They aren&apos;t linked to
+              your account or kept.
+            </DialogDescription>
+          </DialogHeader>
+          <Button
+            size="sm"
+            className="w-fit"
+            onClick={() => {
+              localStorage.setItem(AI_DISCLOSURE_KEY, "yes");
+              setAiDisclosureOpen(false);
+              void continueWithAi();
+            }}
+          >
+            Continue
+          </Button>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

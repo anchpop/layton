@@ -30,6 +30,12 @@ being able to read a word of it.
 - **Private books.** Mark a book private and it vanishes from the library
   fifteen minutes after you stop writing, or the moment you press the lock. A
   locked library gives no sign that private books exist at all.
+- **Continue with AI.** A button in the editor asks a large base model to
+  keep writing from the caret. Suggested prose arrives with a wash of
+  background color until you edit it into your own, and the wash is stripped
+  from shared copies. This is the one deliberate exception to end-to-end
+  encryption — the model must read the text it continues — so the first press
+  says exactly that; requests carry the prose alone, nothing about the account.
 - **Share a copy by link.** One link, readable by anyone who holds it, no
   account needed. The copy is frozen at the moment you cut the link, encrypted
   under a key that travels only in the URL fragment — the part after the `#`
@@ -238,6 +244,15 @@ each was last written in, whether one is archived, and the size and timing of
 every edit. Titles and prose are opaque; the shape of the writing life around
 them is not.
 
+Using **Continue with AI** additionally sends the current chapter's text (up
+to the caret) to the model server — sealed to that server's own public key, so
+the Cloudflare Worker in between relays ciphertext it cannot open, and the
+reply comes back sealed to a key only that browser tab held. The Worker checks
+that the request comes from a signed-in session and forwards the envelope
+alone; nothing is logged or stored, and the model request is not tied to the
+account. Only the machine running the model reads the prose, which is the
+irreducible cost of asking a model to continue it.
+
 ### There is no recovery
 
 No recovery key, no reset, no support path. A copy of the key that could rescue
@@ -390,6 +405,7 @@ src/
     crypto.ts      the sealed envelope and the key derivations. All WebCrypto
     vault.ts       which keys are held, how they are got, and when they go
     schema.ts      ProseMirror schema, deliberately small
+    autocomplete.ts  continue-with-AI: prompt from the caret, fetch, insert
     bytes.ts       base64 bridge between Loro and PostgREST
     passkey.ts     WebAuthn enrolment, sign-in, and management
     pwa.ts         installed-app and platform detection
@@ -400,4 +416,5 @@ src/
                    BookSharing, SharedStory (the public reader), UpdatePrompt
     ui/            shadcn components (owned, edited in place)
 supabase/migrations/
+worker/index.ts     the /api/complete proxy: session check, then the model
 ```

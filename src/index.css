@@ -61,6 +61,9 @@
      recede behind the text. */
   --prose-faint: #9c968c;
   --selection: #e9dcc6;
+  /* Cool against the warm paper, so machine-suggested prose reads as not yet
+     part of the page. */
+  --ai-mark: #e2e8e9;
 
   --radius: 0.5rem;
   color-scheme: light;
@@ -103,6 +106,7 @@
 
   --prose-faint: #6a655c;
   --selection: #3a3222;
+  --ai-mark: #222a2d;
 
   color-scheme: dark;
 }
@@ -222,6 +226,49 @@
 .prose-surface p {
   margin: 0;
   text-indent: 1.5em;
+}
+
+/* Machine-suggested prose, washed until the writer edits it into their own.
+   `clone` keeps the wash on every line of a wrapped span, not just the first
+   box. */
+.prose-surface span.ai {
+  background: var(--ai-mark);
+  border-radius: 2px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+/* Where a continuation is still being written: a small breathing ellipsis
+   holding the model's place on the page. */
+.prose-surface div.ai-pending {
+  margin: 0.35rem 0;
+  width: fit-content;
+  padding: 0 0.5rem;
+  border-radius: 4px;
+  background: var(--ai-mark);
+  color: var(--prose-faint);
+  user-select: none;
+  animation: ai-pending-breathe 1.6s ease-in-out infinite;
+}
+
+/* No status to report: just the breathing ellipsis holding the spot. */
+.prose-surface div.ai-pending span {
+  font-size: 0.85em;
+}
+
+.prose-surface div.ai-pending span:empty::after {
+  content: "· · ·";
+  letter-spacing: 0.2em;
+}
+
+@keyframes ai-pending-breathe {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 /* First paragraph of a chapter, or the one after a break, is flush left —
