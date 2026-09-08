@@ -5,6 +5,7 @@ import { useAuth, type AuthUser } from "@/hooks/useAuth";
 import { usePasskeyGate } from "@/hooks/usePasskeyGate";
 import { useVault } from "@/hooks/useVault";
 import { ThemeProvider } from "@/components/ThemeProvider";
+import { McpConnect } from "@/components/McpConnect";
 import { Auth } from "@/components/Auth";
 import { Library } from "@/components/Library";
 import { PasskeySetup } from "@/components/PasskeySetup";
@@ -47,6 +48,11 @@ export default function App() {
       />
       <BrowserRouter>
         <Routes>
+          <Route path="/connect" element={loading ? (
+            <div className="p-8 text-sm text-muted-foreground">Loading…</div>
+          ) : !user ? <Auth redirectTo={window.location.href} /> : (
+            <McpConnect key={user.id} userId={user.id} email={user.email} />
+          )} />
           {/* A shared story answers to its link alone. It sits outside the
               auth branch because its reader has no account here — the story's
               key arrives in the URL fragment, not from any vault. */}

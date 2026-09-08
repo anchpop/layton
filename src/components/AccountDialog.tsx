@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { signOut } from "@/lib/vault";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -10,6 +11,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { PasskeyPanel } from "./PasskeyPanel";
+import { McpConnections } from "./McpConnections";
 import { MasterPasswordPanel } from "./MasterPasswordPanel";
 
 /**
@@ -20,6 +22,7 @@ import { MasterPasswordPanel } from "./MasterPasswordPanel";
  * stacked beneath the library where they sit under your work every day.
  */
 export function AccountDialog({ email }: { email: string }) {
+  const [connectionsRevision, setConnectionsRevision] = useState(0);
   return (
     <Dialog>
       <DialogTrigger asChild>
@@ -38,7 +41,9 @@ export function AccountDialog({ email }: { email: string }) {
         </DialogHeader>
 
         <PasskeyPanel />
-        <MasterPasswordPanel />
+        <MasterPasswordPanel onChanged={() => setConnectionsRevision(value => value + 1)} />
+        <Separator />
+        <McpConnections key={connectionsRevision} />
 
         <Separator />
         <Button

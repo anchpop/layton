@@ -2,8 +2,8 @@
 
 A quiet, offline-first place to write fiction. Your work syncs to your account
 across every device, merges without conflicts, keeps working when the network
-doesn't, and is encrypted end to end — the server holds your novel without ever
-being able to read a word of it.
+doesn't, and is encrypted end to end by default. Opt-in AI continuation and MCP connections
+let the services you authorize read the text they need.
 
 **Live:** https://layton.space
 
@@ -26,20 +26,28 @@ being able to read a word of it.
 - **Passkeys.** Sign in with Face ID, Touch ID, or your device lock.
 - **End-to-end encrypted, always.** Every chapter, every edit, and every title
   is sealed in the browser under a master password that never leaves it. There
-  is no plaintext mode and no opt-out.
+  is no plaintext storage mode. An optional MCP connection can delegate selected
+  decryption keys to the hosted server, with explicit consent.
 - **Private books.** Mark a book private and it vanishes from the library
   fifteen minutes after you stop writing, or the moment you press the lock. A
   locked library gives no sign that private books exist at all.
 - **Continue with AI.** A button in the editor asks a large base model to
   keep writing from the caret. Suggested prose arrives with a wash of
   background color until you edit it into your own, and the wash is stripped
-  from shared copies. This is the one deliberate exception to end-to-end
+  from shared copies. This is a deliberate exception to end-to-end
   encryption — the model must read the text it continues — so the first press
   says exactly that; requests carry the prose alone, nothing about the account.
 - **Share a copy by link.** One link, readable by anyone who holds it, no
   account needed. The copy is frozen at the moment you cut the link, encrypted
   under a key that travels only in the URL fragment — the part after the `#`
   that browsers never send — so the server cannot read what it is serving.
+
+- **Connect an AI app with MCP.** OAuth grants read and edit access for 12 months.
+  The password stays in the browser; the hosted MCP receives delegated keys.
+  Private stories require a separate, unchecked consent choice. Revoke a
+  connection from Account → AI connections. Edits carry the AI app’s name in
+  the encrypted history and appear in each story’s AI edit history panel.
+  [Setup and security](docs/mcp.md).
 
 ## Architecture
 
@@ -56,12 +64,13 @@ Browser                          Supabase (Postgres)          Cloudflare
 │   + outbox           │         └──────────────────┘
 └──────────────────────┘
         ▲
-        └── the only place plaintext exists
+        └── plaintext for writing; opt-in MCP can also decrypt authorized books
 ```
 
-There is no server-side application code. Cloudflare serves static files; the
-browser talks straight to Supabase, and Postgres row-level security is the
-authorization boundary — but no longer the only one. Everything crossing that
+The writing app talks straight to Supabase, and Postgres row-level security is
+its authorization boundary. Cloudflare serves the app, relays encrypted AI
+continuations, and hosts the optional OAuth MCP (see [MCP](docs/mcp.md)). For
+ordinary writing, row-level security remains the authorization boundary — but no longer the only one. Everything crossing that
 arrow is ciphertext, so a compromised database, a leaked backup, or a
 subpoenaed Postgres instance yields sealed bytes and timestamps.
 
@@ -133,12 +142,14 @@ master key ──seals──┬──▶ everyday key ──seals──▶ ordin
 ```
 
 Both account keys are random and stored only in sealed form, in `user_keys`.
-The password is never transmitted, and neither is anything derived from it.
+The password and derived master key are never transmitted. Optional MCP consent
+delegates the random everyday account key and, only if selected, the private
+account key to the hosted Worker.
 
 **Why two account keys.** The difference between an ordinary book and a private
 one is precisely *which key is currently in memory*. The everyday key is kept on
 the device as a non-extractable `CryptoKey` in IndexedDB, so ordinary books open
-with no prompt, offline, forever. The private key is never persisted anywhere —
+with no prompt, offline, forever. Without an MCP grant, the private key is never persisted unwrapped anywhere —
 it lives in one module variable and dies with the tab, the idle timer, or the
 lock button. One key could not express that difference; a boolean column could
 have, but see below.
@@ -253,11 +264,17 @@ alone; nothing is logged or stored, and the model request is not tied to the
 account. Only the machine running the model reads the prose, which is the
 irreducible cost of asking a model to continue it.
 
+Authorizing MCP additionally allows the hosted Worker and connected AI app to
+read current text from the selected categories of stories. This access includes
+future synced edits and lasts until expiration or revocation; locking your
+browser does not revoke it. [MCP security and revocation](docs/mcp.md) describes
+the delegated keys and database capability.
+
 ### There is no recovery
 
-No recovery key, no reset, no support path. A copy of the key that could rescue
-a forgotten password is a copy that makes "the server cannot read your writing"
-false. The setup screen says so in those words and asks for a tick.
+No recovery key, no reset, no support path. MCP delegation is for authorized
+story reads; it does not offer a password or vault-recovery mechanism. The setup
+screen explains the lack of recovery and asks for a tick.
 
 The only escape is demolition: an "erase everything" path on the unlock screen
 that deletes every book and lets a new vault be created over the empty space.
@@ -370,8 +387,10 @@ pnpm build
 npx wrangler deploy
 ```
 
-`wrangler.jsonc` is assets-only with `not_found_handling:
-single-page-application`, so client-side routes resolve on hard refresh. It
+`wrangler.jsonc` serves assets with `not_found_handling:
+single-page-application`, so client-side routes resolve on hard refresh. The
+Worker runs the AI relay, OAuth and MCP endpoints; MCP also requires the migration
+and KV setup in [docs/mcp.md](docs/mcp.md). It
 serves one custom domain; adding a `routes` entry is what disables the
 `workers.dev` URL, which is deliberate (see passkeys above).
 
@@ -416,5 +435,7 @@ src/
                    BookSharing, SharedStory (the public reader), UpdatePrompt
     ui/            shadcn components (owned, edited in place)
 supabase/migrations/
-worker/index.ts     the /api/complete proxy: session check, then the model
+worker/index.ts     OAuth MCP routing and consent
+worker/mcp/         delegated read access, story rendering, and tools
+worker/relay.ts     the /api/complete proxy: session check, then the model
 ```

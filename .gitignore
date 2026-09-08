@@ -7,3 +7,6 @@ dist
 .DS_Store
 *.tsbuildinfo
 supabase/.temp
+
+.dev.vars
+.dev.vars.*

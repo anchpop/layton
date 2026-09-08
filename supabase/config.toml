@@ -135,7 +135,7 @@ enabled = true
 # Store analytical data in S3 for running ETL jobs over Iceberg Catalog
 # This feature is only available on the hosted platform.
 [storage.analytics]
-enabled = false
+enabled = true
 max_namespaces = 5
 max_tables = 10
 max_catalogs = 2
@@ -160,7 +160,7 @@ site_url = "https://layton.space"
 # The public URL that Auth serves on. Defaults to the API external URL with `/auth/v1` appended.
 # external_url = ""
 # A list of *exact* URLs that auth providers are permitted to redirect to post authentication.
-additional_redirect_urls = ["https://layton.space", "http://localhost:5173"]
+additional_redirect_urls = ["https://layton.space", "https://layton.space/**", "https://layton.space/connect**", "http://localhost:5173", "http://localhost:5173/**", "http://localhost:5173/connect**", "http://localhost:8787", "http://localhost:8787/connect**"]
 # How long tokens are valid for, in seconds. Defaults to 3600 (1 hour), maximum 604,800 (1 week).
 # One week (the maximum). An offline-first app must survive being opened on a
 # plane: once the access token truly expires, Supabase treats the session as

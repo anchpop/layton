@@ -1,21 +1,24 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "layton",
-  "compatibility_date": "2026-07-30",
+  "compatibility_date": "2026-09-08",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   // Canonical origin. Passkeys are pinned to a single WebAuthn rp_id, so this
   // host is the one that can sign you in with Face ID / Touch ID.
   "routes": [{ "pattern": "layton.space", "custom_domain": true }],
-  // The Worker exists for exactly one route: /api/* (the LLM continuation
-  // proxy — see worker/index.ts). Everything else is a static SPA talking
-  // directly to Supabase, and run_worker_first keeps it that way: only /api/*
-  // invokes the script, every other path is served from assets as before.
+  // Static writing app plus the AI relay and opt-in OAuth MCP.
   "main": "worker/index.ts",
   "assets": {
+    "binding": "ASSETS",
     "directory": "./dist",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": ["/api/*", "/mcp", "/mcp/*", "/oauth/*", "/.well-known/*", "/connect"]
   },
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "1b0cc0010f684c098f359e1b1b8f0848" }],
   "vars": {
+    "MCP_ORIGIN": "https://layton.space",
+    // Comma-separated browser client origins, if needed. Native clients omit Origin.
+    "MCP_ALLOWED_ORIGINS": "",
     // Where the vLLM server lives. Its bearer key is a secret (VLLM_API_KEY,
     // via `wrangler secret put`), not a var.
     "MODAL_URL": "https://anchpop--llama-405b-base-serve.modal.run",
@@ -24,6 +27,8 @@
     "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_q5IyiwBfH694ixqFc4nTRA_dDQphH7A"
   },
   "observability": {
-    "enabled": true
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": { "invocation_logs": false }
   }
 }

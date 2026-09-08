@@ -65,6 +65,9 @@ jobs:
           VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.VITE_SUPABASE_PUBLISHABLE_KEY }}
 
+      - name: Test MCP authorization and encryption boundaries
+        run: pnpm test:mcp
+
       # Deliberately a step of its own. The build runs the whole dependency tree
       # as code; keeping the deploy token out of that step means a compromised
       # transitive dependency cannot read the one credential that can publish to

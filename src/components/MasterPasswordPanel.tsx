@@ -20,7 +20,7 @@ const MIN_LENGTH = 10;
  * to someone strengthening one and someone who has just lost a laptop, and
  * only the second of those is disappointed by what this does.
  */
-export function MasterPasswordPanel() {
+export function MasterPasswordPanel({ onChanged }: { onChanged?: () => void }) {
   const [open, setOpen] = useState(false);
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
@@ -42,7 +42,8 @@ export function MasterPasswordPanel() {
       setNext("");
       setConfirm("");
       setOpen(false);
-      toast("Master password changed. Your other devices keep working.");
+      onChanged?.();
+      toast("Master password changed. AI connections revoked; your other devices keep working.");
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Could not change the password.",
@@ -73,7 +74,7 @@ export function MasterPasswordPanel() {
       {open && (
         <form onSubmit={onSubmit} className="pb-6">
           <p className="mb-5 text-xs text-muted-foreground">
-            Applies on every device. Devices already unlocked stay unlocked.
+            Applies on every device and revokes AI connections. Devices already unlocked stay unlocked.
           </p>
 
           <Label

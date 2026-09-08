@@ -73,6 +73,7 @@ import { SyncBadge } from "./SyncBadge";
 import { ThemeToggle } from "./ThemeToggle";
 import { UnlockPrivate } from "./UnlockPrivate";
 import { BookPrivacy } from "./BookPrivacy";
+import { McpEditHistory } from "./McpEditHistory";
 import { BookSharing } from "./BookSharing";
 
 /**
@@ -509,6 +510,7 @@ function BookWorkspace({
           {sync && syncState.status !== "loading" && (
             <>
               <BookSharing sync={sync} />
+              {doc && <McpEditHistory key={bookId} doc={doc} />}
               <BookPrivacy sync={sync} isPrivate={syncState.isPrivate} />
             </>
           )}

@@ -58,7 +58,7 @@ export default defineConfig({
         // Never answer a Supabase call from the precache. Sync has its own
         // offline handling (an IndexedDB outbox); a stale cached API response
         // would be worse than a clean failure.
-        navigateFallbackDenylist: [/supabase\.co/],
+        navigateFallbackDenylist: [/supabase\.co/, /^\/mcp(?:\/|$)/, /^\/oauth\//, /^\/\.well-known\//, /^\/api\//, /^\/connect(?:\?|$)/],
         runtimeCaching: [
           {
             urlPattern: ({ url }) => url.hostname.endsWith("supabase.co"),
