@@ -214,7 +214,7 @@ type NodeViewSpec = {
 };
 
 /**
- * A cold start loads 405GB of weights, which takes minutes. Rather than spin
+ * A cold start loads the model weights, which can take minutes. Rather than spin
  * silently, poll the model's health — which reports how far along the boot
  * is — into the pending marker itself, then come back and try again.
  */
@@ -225,8 +225,8 @@ async function waitForModel(
 ): Promise<void> {
   setPendingStatus(gen, "Waking the model…");
   try {
-    // A full cold boot is ~15–20 minutes today; a crashed boot aborts early
-    // via the "failed" stage, so a long ceiling only ever covers real work.
+    // Leave room for downloading weights and compiling kernels; a crashed
+    // boot aborts early via the "failed" stage.
     for (let i = 0; i < 450; i++) {
       if (signal?.aborted) throw new GenerationStopped("Stopped.");
       await new Promise((resolve) => setTimeout(resolve, 4000));

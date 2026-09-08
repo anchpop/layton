@@ -37,6 +37,7 @@ let the services you authorize read the text they need.
   from shared copies. This is a deliberate exception to end-to-end
   encryption — the model must read the text it continues — so the first press
   says exactly that; requests carry the prose alone, nothing about the account.
+  The [model server](model/README.md) uses Llama 3.1 70B Base (FP8) on one H200.
 - **Share a copy by link.** One link, readable by anyone who holds it, no
   account needed. The copy is frozen at the moment you cut the link, encrypted
   under a key that travels only in the URL fragment — the part after the `#`
