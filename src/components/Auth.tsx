@@ -149,15 +149,23 @@ export function Auth({ redirectTo = window.location.origin }: { redirectTo?: str
                   <Mail className="size-4" />
                   {busy ? "Sending…" : "Send sign-in link"}
                 </Button>
-                <p className="mt-3 text-xs text-muted-foreground">
-                  No password. We email you a link that signs you in.
-                </p>
               </form>
             )}
 
             {error && <p className="mt-4 text-sm text-destructive">{error}</p>}
           </div>
         )}
+
+        <footer className="mt-8 border-t pt-4 text-xs text-muted-foreground">
+          <a
+            href="https://github.com/anchpop/layton"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="rounded-sm underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
+          >
+            GitHub
+          </a>
+        </footer>
       </div>
     </div>
   );
