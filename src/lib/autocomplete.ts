@@ -274,6 +274,14 @@ export class ConnectionLost extends Error {}
 export class GenerationStopped extends Error {}
 
 /**
+ * Generations this tab is streaming right now. Their markers are not
+ * recovery's business: through a cold start the server has not heard of the
+ * generation yet and calls it "gone", and once it finishes the stored copy
+ * would be typed in a second time beside the live stream.
+ */
+const streaming = new Set<string>();
+
+/**
  * Ask for a continuation and hand its text out as it arrives.
  *
  * The response is a stream of sealed envelopes, one per model chunk, each
@@ -292,6 +300,23 @@ export async function streamContinuation(
   const token = data.session?.access_token;
   if (!token) throw new Error("Sign in again to use this.");
 
+  const { gen } = session;
+  streaming.add(gen);
+  try {
+    await relayContinuation(token, session, prompt, maxTokens, onDelta, signal);
+  } finally {
+    streaming.delete(gen);
+  }
+}
+
+async function relayContinuation(
+  token: string,
+  session: ContinuationSession,
+  prompt: string,
+  maxTokens: number,
+  onDelta: (text: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
   const { gen, epk, reqKey, resKey } = session;
   const req = await sealText(reqKey, JSON.stringify({ prompt, maxTokens, gen }));
 
@@ -511,7 +536,10 @@ export async function recoverPendingMarkers(
 ): Promise<void> {
   const markers: { gen: string; key: string }[] = [];
   view.state.doc.descendants((node) => {
-    if (node.type === schema.nodes.ai_pending) {
+    if (
+      node.type === schema.nodes.ai_pending &&
+      !streaming.has(node.attrs.gen as string)
+    ) {
       markers.push({
         gen: node.attrs.gen as string,
         key: node.attrs.key as string,
