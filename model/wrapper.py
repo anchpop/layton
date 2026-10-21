@@ -1,181 +1,235 @@
-"""Decrypting front door for the vLLM server.
+"""Authenticated ephemeral encryption boundary; vLLM is localhost-only.
 
-The browser seals its prompt to this machine's public key, so everything in
-between — Cloudflare included — relays ciphertext it cannot open. This wrapper
-is the only listener on the public port; vLLM itself binds to localhost.
-
-Per request: the client sends an ephemeral P-256 public key plus a sealed
-envelope. ECDH against our static private key, then HKDF-SHA256 with two info
-labels, yields one AES-256-GCM key for the request and another for the
-response. The envelope format matches the client's crypto.ts exactly:
-[version=1][IV 12B][ciphertext+tag].
+Wire encodings are fixed-order JSON arrays, UTF-8 without whitespace. Never
+log envelopes, plaintext, tokens, or exception text at this boundary.
 """
-
 import asyncio
 import base64
+from contextlib import asynccontextmanager
+import hashlib
+import hmac
 import json
 import os
 import re
 import time
 
 import httpx
-
-# The container runs inside Modal, so the client library and credentials are
-# already present; the Dict is where finished continuations wait (sealed) for
-# a browser that closed its tab before the stream ended.
-try:
-    import modal
-
-    _results = modal.Dict.from_name("layton-ai-results", create_if_missing=True)
-except Exception:  # pragma: no cover - storage is an enhancement, not a need
-    _results = None
-
-RESULT_TTL_SECONDS = 14 * 24 * 3600
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import ec, utils
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
-# The launcher supplies the same checkpoint it passes to vLLM.
+# Tests inject a local store; production must not silently disable replay defense.
+try:
+    import modal
+except ImportError:
+    _results = None
+else:
+    _results = modal.Dict.from_name("layton-ai-results", create_if_missing=True)
+
+RESULT_TTL_SECONDS = 14 * 24 * 3600
+KEY_LIFETIME = 3600
+KEY_GRACE = 300
+VERSION = 2
+ENVELOPE_VERSION = 1
 MODEL = os.environ["LAYTON_MODEL"]
+# The Worker's bearer key. Checked before anything else, on every route.
+API_KEY = os.environ["VLLM_API_KEY"]
 VLLM = "http://127.0.0.1:8001"
 MAX_PROMPT_CHARS = 400_000
 MAX_GEN_TOKENS = 8192
 MAX_MODEL_LEN = int(os.environ.get("LAYTON_MAX_MODEL_LEN", "131072"))
-ENVELOPE_VERSION = 1
-
-API_KEY = os.environ["VLLM_API_KEY"]
-_private_key = serialization.load_der_private_key(
-    base64.b64decode(os.environ["LAYTON_E2E_PRIVATE_KEY_DER_B64"]), password=None
+_signing_key = serialization.load_der_private_key(
+    base64.b64decode(os.environ["LAYTON_AI_SIGNING_KEY_DER_B64"], validate=True), password=None
 )
-
-app = FastAPI()
-
-
-def derive_keys(epk_raw: bytes) -> tuple[bytes, bytes]:
-    peer = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), epk_raw)
-    shared = _private_key.exchange(ec.ECDH(), peer)
-
-    def kdf(info: bytes) -> bytes:
-        # salt=None is HKDF's all-zero default, which is also what the client's
-        # empty-salt WebCrypto call means: HMAC pads both to the same block.
-        return HKDF(
-            algorithm=hashes.SHA256(), length=32, salt=None, info=info
-        ).derive(shared)
-
-    return kdf(b"layton-ai/request"), kdf(b"layton-ai/response")
+if not isinstance(_signing_key, ec.EllipticCurvePrivateKey) or not isinstance(_signing_key.curve, ec.SECP256R1):
+    raise ValueError("AI signing key must be ECDSA P-256")
 
 
-def unseal(key: bytes, envelope: bytes) -> bytes:
-    if len(envelope) <= 13 or envelope[0] != ENVELOPE_VERSION:
+def encode(value) -> bytes:
+    return json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode()
+
+
+def b64(value: bytes) -> str:
+    return base64.b64encode(value).decode()
+
+
+class KeyRing:
+    def __init__(self):
+        self.current = None
+        self.previous = None
+        self.rotate()
+
+    def rotate(self):
+        now = time.time()
+        if self.previous and now >= self.previous["expiresAt"] + KEY_GRACE:
+            self.previous = None
+        if self.current is None or now >= self.current["expiresAt"]:
+            self.previous = self.current if self.current and now < self.current["expiresAt"] + KEY_GRACE else None
+            private = ec.generate_private_key(ec.SECP256R1())
+            self.current = {"private": private, "version": VERSION, "keyId": os.urandom(16).hex(),
+                "publicKey": b64(private.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)),
+                "expiresAt": int(now) + KEY_LIFETIME}
+
+    def statement(self):
+        self.rotate()
+        public = {k: v for k, v in self.current.items() if k != "private"}
+        signed = encode([VERSION, public["keyId"], public["publicKey"], public["expiresAt"]])
+        r, s = utils.decode_dss_signature(_signing_key.sign(signed, ec.ECDSA(hashes.SHA256())))
+        return {**public, "signature": b64(r.to_bytes(32, "big") + s.to_bytes(32, "big"))}
+
+    def find(self, key_id):
+        self.rotate()
+        return next((key for key in (self.current, self.previous) if key and key["keyId"] == key_id), None)
+
+
+_keys = KeyRing()
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    async def rotate():
+        while True:
+            _keys.rotate()
+            await asyncio.sleep(1)
+    task = asyncio.create_task(rotate())
+    try:
+        yield
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+app = FastAPI(lifespan=lifespan)
+
+
+@app.middleware("http")
+async def private_response(request, call_next):
+    if not hmac.compare_digest(request.headers.get("authorization", ""), f"Bearer {API_KEY}"):
+        response = JSONResponse({"error": "unauthorized"}, status_code=401)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+    try:
+        response = await call_next(request)
+    except Exception:
+        # No exception repr: library errors can embed plaintext/token ids.
+        response = JSONResponse({"error": "request failed"}, status_code=500)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.get("/key")
+async def key():
+    return _keys.statement()
+
+
+def derive_keys(key, epk: str, gen: str) -> tuple[bytes, bytes, bytes]:
+    peer = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), base64.b64decode(epk, validate=True))
+    shared = key["private"].exchange(ec.ECDH(), peer)
+    transcript = [VERSION, key["keyId"], key["publicKey"], epk, gen]
+    return tuple(HKDF(algorithm=hashes.SHA256(), length=32, salt=None,
+        info=encode(["layton-ai", *transcript, purpose])).derive(shared)
+        for purpose in ("request", "stream", "result"))
+
+
+def aad(gen, kind, seq):
+    return encode([VERSION, gen, kind, seq])
+
+
+def unseal(key: bytes, envelope: bytes, context: bytes) -> bytes:
+    if len(envelope) < 29 or envelope[0] != ENVELOPE_VERSION:
         raise ValueError("bad envelope")
-    return AESGCM(key).decrypt(envelope[1:13], envelope[13:], None)
+    return AESGCM(key).decrypt(envelope[1:13], envelope[13:], context)
 
 
-def seal(key: bytes, plaintext: bytes) -> bytes:
+def seal(key: bytes, plaintext: bytes, context: bytes) -> bytes:
+    # Fresh per-generation keys seal only thousands of frames: random 96-bit
+    # nonces stay far below collision bounds without mutable nonce counters.
     iv = os.urandom(12)
-    return bytes([ENVELOPE_VERSION]) + iv + AESGCM(key).encrypt(iv, plaintext, None)
+    return bytes([ENVELOPE_VERSION]) + iv + AESGCM(key).encrypt(iv, plaintext, context)
 
 
-_vllm_ready = False
+def frame(key, gen, kind, seq, value):
+    return encode({"type": kind, "seq": seq, "data": b64(seal(key, encode(value), aad(gen, kind, seq)))}) + b"\n"
 
 
 async def wait_for_vllm() -> bool:
-    """Ride out a brief warm-up, but don't hold a request through a cold
-    start — loading model weights takes minutes, and the client would
-    rather hear "not yet" than watch a spinner that long."""
-    global _vllm_ready
-    if _vllm_ready:
-        return True
-    async with httpx.AsyncClient() as client:
-        for _ in range(45):
-            try:
-                if (await client.get(f"{VLLM}/health")).status_code == 200:
-                    _vllm_ready = True
-                    return True
-            except httpx.HTTPError:
-                pass
-            await asyncio.sleep(2)
-    return False
+    # Probe even after startup: a crashed engine must not look permanently ready.
+    async with httpx.AsyncClient(timeout=2) as client:
+        try:
+            return (await client.get(f"{VLLM}/health")).status_code == 200
+        except httpx.HTTPError:
+            return False
 
 
-def _loading_state() -> dict | None:
-    """Where the boot is, read off vLLM's log tail.
-
-    Three acts, in order: weights stream off the volume ("Loading safetensors
-    checkpoint shards: 42%"), kernels compile (quiet in the log — minutes of
-    apparent stillness after shards hit 100%), and CUDA graphs get captured
-    ("Capturing CUDA graph shapes: 61%"). Reported so the person watching the
-    toast knows the difference between progress and a hang.
-    """
+def _loading_state():
+    # The launcher writes ONLY structured, allowlisted startup progress, never
+    # the raw vLLM log (engine failure dumps can contain prompt token IDs).
     try:
-        with open("/tmp/vllm.log", "rb") as f:
-            f.seek(0, 2)
-            f.seek(max(0, f.tell() - 131072))
-            tail = f.read().decode(errors="ignore")
-    except OSError:
+        with open("/tmp/layton-loading.json") as file:
+            return json.load(file)
+    except (OSError, ValueError):
         return None
-    if "Engine core initialization failed" in tail or "OutOfMemoryError" in tail:
-        return {"stage": "failed", "pct": None}
-    graphs = re.findall(r"Capturing CUDA graph[^:]*:\s*(\d+)%", tail)
-    if graphs:
-        return {"stage": "graphs", "pct": int(graphs[-1])}
-    shards = re.findall(r"checkpoint shards:\s*(\d+)%", tail)
-    if shards and int(shards[-1]) >= 100:
-        return {"stage": "compile", "pct": None}
-    if shards:
-        return {"stage": "weights", "pct": int(shards[-1])}
-    return None
 
 
 @app.get("/health")
-async def health() -> dict:
-    try:
-        async with httpx.AsyncClient(timeout=2) as client:
-            model_up = (await client.get(f"{VLLM}/health")).status_code == 200
-    except httpx.HTTPError:
-        model_up = False
-    return {
-        "wrapper": True,
-        "model": model_up,
-        "modelId": MODEL,
-        "maxModelLen": MAX_MODEL_LEN,
-        "loading": None if model_up else _loading_state(),
-    }
+async def health():
+    ready = await wait_for_vllm()
+    return {"wrapper": True, "model": ready, "modelId": MODEL, "maxModelLen": MAX_MODEL_LEN,
+        "loading": None if ready else _loading_state()}
 
 
 @app.post("/complete")
 async def complete(request: Request) -> Response:
-    if request.headers.get("authorization") != f"Bearer {API_KEY}":
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
-
     try:
         body = await request.json()
-        req_key, res_key = derive_keys(base64.b64decode(body["epk"]))
-        opened = json.loads(unseal(req_key, base64.b64decode(body["req"])))
-        prompt = opened["prompt"]
-        if not (isinstance(prompt, str) and prompt.strip()):
-            raise ValueError("empty prompt")
-        max_tokens = opened.get("maxTokens", 1024)
-        if not isinstance(max_tokens, int):
-            raise ValueError("bad maxTokens")
-        max_tokens = max(16, min(MAX_GEN_TOKENS, max_tokens))
-        gen_id = opened.get("gen") or ""
-        if not re.fullmatch(r"[0-9a-fA-F-]{8,64}", gen_id):
-            gen_id = ""
+        gen_id = body["gen"]
+        if body["version"] != VERSION or not re.fullmatch(r"[0-9a-f-]{36}", gen_id):
+            raise ValueError()
+        server_key = _keys.find(body["keyId"])
+        if server_key is None:
+            return JSONResponse({"error": "unknown_key"}, status_code=409)
+        req_key, stream_key, _ = derive_keys(server_key, body["epk"], gen_id)
+        # Don't retain an ECDH private key through a long-running generation.
+        del server_key
     except Exception:
         return JSONResponse({"error": "bad envelope"}, status_code=400)
 
-    if not await wait_for_vllm():
-        return JSONResponse({"error": "model still loading"}, status_code=503)
+    def error(message):
+        return Response(frame(stream_key, gen_id, "error", 0, {"error": message}), media_type="application/x-ndjson")
 
-    def line(obj: dict) -> bytes:
-        """One NDJSON line: a sealed envelope, base64, newline-framed. Every
-        line — text deltas, the final diagnostics, even mid-stream errors —
-        is ciphertext to everything between here and the browser."""
-        return base64.b64encode(seal(res_key, json.dumps(obj).encode())) + b"\n"
+    try:
+        opened = json.loads(unseal(req_key, base64.b64decode(body["req"], validate=True), aad(gen_id, "request", 0)))
+        prompt = opened["prompt"]
+        # No timestamp: a replay must name a key id from the last hour (older
+        # ones are erased) and a generation id nobody has claimed (claims last
+        # 14 days). Together those refuse it without trusting anyone's clock.
+        if opened["gen"] != gen_id:
+            raise ValueError()
+        if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > MAX_PROMPT_CHARS:
+            raise ValueError()
+        max_tokens = opened["maxTokens"]
+        if type(max_tokens) is not int:
+            raise ValueError()
+        max_tokens = max(16, min(MAX_GEN_TOKENS, max_tokens))
+        res_key = base64.b64decode(opened["resultKey"], validate=True)
+        if len(res_key) != 32:
+            raise ValueError()
+    except Exception:
+        return error("bad request")
+    if not await wait_for_vllm():
+        # No claim yet, so the browser can wait for health and retry safely.
+        return JSONResponse({"error": "model still loading"}, status_code=503)
+    try:
+        # Atomic across concurrent requests AND container restarts. A claim is
+        # never released on failure: duplicate ciphertext must never infer twice.
+        claimed = await asyncio.to_thread(_results.put, gen_id, {"t": time.time()}, skip_if_exists=True)
+        if not claimed:
+            return error("generation already used")
+    except Exception:
+        return error("generation unavailable")
 
     payload = {
         "model": MODEL,
@@ -202,81 +256,60 @@ async def complete(request: Request) -> Response:
         "stream_options": {"include_usage": True},
     }
 
-    # The generation runs as its own task, decoupled from this connection: a
-    # closed tab stops the *stream* but not the writing. The finished text is
-    # sealed and stored under the generation id, where /result can find it.
     queue: asyncio.Queue = asyncio.Queue()
 
     async def run_generation():
         finish = None
-        usage: dict = {}
-        parts: list[str] = []
+        usage = {}
+        parts = []
+        seq = 0
+        saw_done = False
         try:
             async with httpx.AsyncClient(timeout=900) as client:
-                async with client.stream(
-                    "POST",
-                    f"{VLLM}/v1/completions",
-                    headers={"Authorization": f"Bearer {API_KEY}"},
-                    json=payload,
-                ) as r:
-                    if r.status_code != 200:
-                        await queue.put({"error": "model error"})
-                        return
-                    async for raw in r.aiter_lines():
+                async with client.stream("POST", f"{VLLM}/v1/completions", json=payload) as response:
+                    if response.status_code != 200:
+                        raise ValueError()
+                    async for raw in response.aiter_lines():
                         if not raw.startswith("data: "):
                             continue
-                        data = raw[len("data: "):].strip()
+                        data = raw[6:].strip()
                         if data == "[DONE]":
+                            saw_done = True
                             break
                         obj = json.loads(data)
                         if obj.get("usage"):
                             usage = obj["usage"]
                         choices = obj.get("choices") or []
                         if choices:
-                            if choices[0].get("finish_reason"):
-                                finish = choices[0]["finish_reason"]
-                            if choices[0].get("text"):
-                                parts.append(choices[0]["text"])
-                                await queue.put({"t": choices[0]["text"]})
-        except httpx.HTTPError:
-            await queue.put({"error": "model connection lost"})
-            return
-        done = {
-            "done": True,
-            "finishReason": finish,
-            "promptTokens": usage.get("prompt_tokens"),
-            "completionTokens": usage.get("completion_tokens"),
-        }
-        await queue.put(done)
-        if _results is not None and gen_id:
-            try:
-                stored = seal(
-                    res_key,
-                    json.dumps({"text": "".join(parts), **done}).encode(),
-                )
-                _results[gen_id] = {
-                    "t": time.time(),
-                    "res": base64.b64encode(stored).decode(),
-                }
-                # Opportunistic sweep so the store never just accumulates.
-                now = time.time()
-                for key, value in list(_results.items()):
-                    if now - value.get("t", 0) > RESULT_TTL_SECONDS:
-                        _results.pop(key)
-            except Exception:
-                pass
+                            finish = choices[0].get("finish_reason") or finish
+                            delta = choices[0].get("text")
+                            if delta:
+                                parts.append(delta)
+                                await queue.put(frame(stream_key, gen_id, "delta", seq, {"t": delta}))
+                                seq += 1
+            if not saw_done or finish is None:
+                raise ValueError()
+            text = "".join(parts)
+            done = {"done": True, "count": seq, "hash": b64(hashlib.sha256(text.encode()).digest()),
+                "finishReason": finish, "promptTokens": usage.get("prompt_tokens"), "completionTokens": usage.get("completion_tokens")}
+            stored = b64(seal(res_key, encode({"text": text, **done}), aad(gen_id, "result", 0)))
+            await asyncio.to_thread(_results.put, gen_id, {"t": time.time(), "res": stored})
+            await queue.put(frame(stream_key, gen_id, "final", seq, done))
+        except Exception:
+            await queue.put(frame(stream_key, gen_id, "error", seq, {"error": "generation failed"}))
+        finally:
+            await queue.put(None)
 
     task = asyncio.create_task(run_generation())
-    if gen_id:
-        _active[gen_id] = task
-        task.add_done_callback(lambda _t: _active.pop(gen_id, None))
+    _active[gen_id] = task
+    task.add_done_callback(lambda _t: _active.pop(gen_id, None))
 
     async def relay():
         while True:
             item = await queue.get()
-            yield line(item)
-            if item.get("done") or item.get("error"):
+            if item is None:
                 break
+            yield item
 
     return StreamingResponse(relay(), media_type="application/x-ndjson")
 
@@ -285,19 +318,15 @@ _active: dict[str, asyncio.Task] = {}
 
 
 @app.get("/result/{gen_id}")
-async def result(gen_id: str, request: Request) -> JSONResponse:
-    """What became of a generation: its sealed text, a "still writing", or a
-    shrug. The blob can only be opened by a key wrapped inside the book that
-    asked for it, so even this store learns nothing from what it holds."""
-    if request.headers.get("authorization") != f"Bearer {API_KEY}":
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
-    if _results is not None:
-        try:
-            entry = _results.get(gen_id)
-        except Exception:
-            entry = None
-        if entry:
-            return JSONResponse({"status": "ready", "res": entry["res"]})
-    if gen_id in _active:
-        return JSONResponse({"status": "pending"})
-    return JSONResponse({"status": "gone"})
+async def result(gen_id: str):
+    try:
+        entry = await asyncio.to_thread(_results.get, gen_id)
+    except Exception:
+        return JSONResponse({"error": "result unavailable"}, status_code=503)
+    # Read-time TTL is authoritative; the CPU sweeper is only physical cleanup.
+    if entry and time.time() - entry.get("t", 0) >= RESULT_TTL_SECONDS:
+        await asyncio.to_thread(_results.pop, gen_id, None)
+        entry = None
+    if entry and "res" in entry:
+        return {"status": "ready", "res": entry["res"]}
+    return {"status": "pending" if gen_id in _active else "gone"}

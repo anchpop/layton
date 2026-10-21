@@ -6,8 +6,9 @@ import { toast } from "sonner";
 
 import { supabase } from "./supabase";
 import { schema } from "./schema";
-import { base64ToBytes, bytesToBase64 } from "./bytes";
-import { importContentKey, sealText, unsealText } from "./crypto";
+import { importContentKey } from "./crypto";
+import { handshake, ModelFailed, serverStatement, sealRequest, StreamVerifier, openResult, VERSION, type ContinuationSession } from "./ai-protocol";
+export type { ContinuationSession } from "./ai-protocol";
 import { chapterText, readChapters } from "./book";
 
 /**
@@ -18,8 +19,8 @@ import { chapterText, readChapters } from "./book";
  * relays the envelope — it cannot open it, and neither can Cloudflare under
  * it. Only the machine running the model reads the prompt, which is the
  * irreducible cost of asking a model to continue it; the UI discloses that
- * before the first use (see BookView). The reply comes back sealed to a key
- * that existed only in this function, and is inserted at the caret under the
+ * before the first use (see BookView). The reply comes back sealed to a
+ * per-generation stream key, and is inserted at the caret under the
  * `ai` mark, so suggested words stay visibly washed until the writer makes
  * them their own.
  */
@@ -30,15 +31,6 @@ import { chapterText, readChapters } from "./book";
  * far goes along, and the model additionally left-truncates anything over.
  */
 const MAX_PROMPT_CHARS = 400_000;
-
-/**
- * The model server's P-256 public key (SPKI). Its private half lives in a
- * Modal secret and never leaves that deployment.
- */
-const MODEL_SERVER_PUBKEY =
-  "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEu2R21glMlfflpQmq2EWeaJWnFonDTQNIwb2K7yJLA9AWkTvO1UJXXLvznWScm7JBjbL2SbmC5nzYds5QmJqVcw==";
-
-const utf8 = new TextEncoder();
 
 /**
  * How much to ask for in one press, chosen from the caret beside the button.
@@ -64,70 +56,12 @@ export function saveAiLength(tokens: number): void {
   localStorage.setItem(LENGTH_KEY, String(tokens));
 }
 
-/**
- * One-shot ECDH against the server key: a fresh ephemeral keypair, then
- * HKDF-SHA256 splits the shared secret into a sealing key for the request and
- * an unsealing key for the response. The ephemeral public key rides along so
- * the server can do the same derivation; its private half is never stored, so
- * a captured exchange cannot be opened later even with the server's key.
- */
-export type ContinuationSession = {
-  /** Names this generation everywhere: the marker, the store, the request. */
-  gen: string;
-  epk: string;
-  reqKey: CryptoKey;
-  resKey: CryptoKey;
-  /**
-   * The response key's raw bytes, exposed so they can be wrapped under the
-   * book key and ride in the pending marker — that wrapped copy is what lets
-   * a later session (this tab long closed) still open the stored result.
-   */
-  resKeyRaw: Uint8Array;
-};
-
+/** Authenticate the hourly model key before deriving any prompt keys. */
 export async function prepareContinuation(): Promise<ContinuationSession> {
-  const params = { name: "ECDH", namedCurve: "P-256" } as const;
-  const serverKey = await crypto.subtle.importKey(
-    "spki",
-    base64ToBytes(MODEL_SERVER_PUBKEY) as BufferSource,
-    params,
-    false,
-    [],
-  );
-  const ephemeral = await crypto.subtle.generateKey(params, false, [
-    "deriveBits",
-  ]);
-  const shared = await crypto.subtle.deriveBits(
-    { name: "ECDH", public: serverKey },
-    ephemeral.privateKey,
-    256,
-  );
-  const hkdf = await crypto.subtle.importKey("raw", shared, "HKDF", false, [
-    "deriveBits",
-  ]);
-  const deriveRaw = async (info: string) =>
-    new Uint8Array(
-      await crypto.subtle.deriveBits(
-        {
-          name: "HKDF",
-          hash: "SHA-256",
-          salt: new Uint8Array() as BufferSource,
-          info: utf8.encode(info) as BufferSource,
-        },
-        hkdf,
-        256,
-      ),
-    );
-  const resKeyRaw = await deriveRaw("layton-ai/response");
-  return {
-    gen: crypto.randomUUID(),
-    epk: bytesToBase64(
-      new Uint8Array(await crypto.subtle.exportKey("raw", ephemeral.publicKey)),
-    ),
-    reqKey: await importContentKey(await deriveRaw("layton-ai/request")),
-    resKey: await importContentKey(resKeyRaw),
-    resKeyRaw,
-  };
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error("Sign in again to use this.");
+  return handshake(await serverStatement(token));
 }
 
 /**
@@ -317,18 +251,14 @@ async function relayContinuation(
   onDelta: (text: string) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const { gen, epk, reqKey, resKey } = session;
-  const req = await sealText(reqKey, JSON.stringify({ prompt, maxTokens, gen }));
-
+  const { gen } = session;
   const post = async () => {
+    const req = await sealRequest(session, prompt, maxTokens);
     try {
       return await fetch("/api/complete", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ epk, req }),
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ version: VERSION, keyId: session.keyId, gen, epk: session.epk, req }),
         signal,
       });
     } catch (err) {
@@ -336,70 +266,67 @@ async function relayContinuation(
       throw err;
     }
   };
-
+  // Both answers come before the server claims the generation, so asking
+  // again is safe — and after an idle spell they come in sequence: the cached
+  // key belonged to a container that has since shut down (409), and the one
+  // that replaced it is still loading weights (503). Each is handled at most
+  // once. The result key survives a re-handshake because its wrapped copy is
+  // already in the book.
   let res = await post();
-  if (res.status === 503) {
-    await waitForModel(token, gen, signal);
+  for (let rekeyed = false, waited = false; ; ) {
+    if (res.status === 409 && !rekeyed) {
+      rekeyed = true;
+      Object.assign(session, await handshake(await serverStatement(token, true), session));
+    } else if (res.status === 503 && !waited) {
+      waited = true;
+      await waitForModel(token, gen, signal);
+    } else break;
     res = await post();
   }
-  if (!res.ok || !res.body) {
-    const body = await res.json().catch(() => null);
-    console.warn("[ai] request failed", { status: res.status, body });
-    throw new Error(
-      (body as { error?: string } | null)?.error ??
-        "The model could not be reached.",
-    );
-  }
-
+  if (!res.ok || !res.body) throw new Error("The model could not be reached.");
+  const verifier = new StreamVerifier(session.streamKey, gen);
   const reader = res.body.getReader();
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
   let buffer = "";
-  let chars = 0;
-  let sawDone = false;
-  for (;;) {
-    let chunk: ReadableStreamReadResult<Uint8Array>;
+  try {
+    for (;;) {
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try { chunk = await reader.read(); }
+      catch {
+        if (signal?.aborted) throw new GenerationStopped("Stopped.");
+        throw new ConnectionLost("Connection lost mid-continuation.");
+      }
+      if (chunk.done) break;
+      try {
+        buffer += decoder.decode(chunk.value, { stream: true });
+      } catch {
+        throw new ConnectionLost("The stream was damaged in transit.");
+      }
+      for (let nl = buffer.indexOf("\n"); nl >= 0; nl = buffer.indexOf("\n")) {
+        const line = buffer.slice(0, nl);
+        buffer = buffer.slice(nl + 1);
+        let delta: string | undefined;
+        try {
+          delta = await verifier.accept(line);
+        } catch (err) {
+          if (err instanceof ModelFailed) throw err;
+          throw new ConnectionLost("The stream was damaged in transit.");
+        }
+        if (delta !== undefined) onDelta(delta);
+      }
+    }
     try {
-      chunk = await reader.read();
-    } catch (err) {
-      if (signal?.aborted) throw new GenerationStopped("Stopped.");
-      console.warn("[ai] stream interrupted", err);
-      throw new ConnectionLost("Connection lost mid-continuation.");
+      buffer += decoder.decode();
+    } catch {
+      throw new ConnectionLost("The stream was damaged in transit.");
     }
-    if (chunk.done) break;
-    buffer += decoder.decode(chunk.value, { stream: true });
-    for (let nl = buffer.indexOf("\n"); nl >= 0; nl = buffer.indexOf("\n")) {
-      const sealedLine = buffer.slice(0, nl).trim();
-      buffer = buffer.slice(nl + 1);
-      if (!sealedLine) continue;
-      const opened = JSON.parse(await unsealText(resKey, sealedLine)) as {
-        t?: string;
-        error?: string;
-        done?: boolean;
-        finishReason?: string;
-        promptTokens?: number;
-        completionTokens?: number;
-      };
-      if (opened.error) throw new Error(`The model failed: ${opened.error}`);
-      if (opened.t) {
-        chars += opened.t.length;
-        onDelta(opened.t);
-      }
-      if (opened.done) {
-        sawDone = true;
-        // The friendly toast stays vague on purpose; specifics live here.
-        console.info("[ai] completion", {
-          promptChars: prompt.length,
-          promptTokens: opened.promptTokens,
-          completionTokens: opened.completionTokens,
-          finishReason: opened.finishReason,
-          chars,
-        });
-      }
-    }
+    if (buffer) throw new ConnectionLost("The stream ended mid-record.");
+    try { verifier.finish(); }
+    catch { throw new ConnectionLost("The stream ended early."); }
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
   }
-  // A clean close without the final line means something upstream died; the
-  // background generation may still finish, so treat it as a broken wire.
-  if (!sawDone) throw new ConnectionLost("The stream ended early.");
 }
 
 /**
@@ -575,16 +502,12 @@ export async function recoverPendingMarkers(
       const resKey = await importContentKey(raw);
       raw.fill(0);
       try {
-        const opened = JSON.parse(await unsealText(resKey, body.res)) as {
-          text?: string;
-          finishReason?: string;
-        };
+        const opened = await openResult(resKey, marker.gen, body.res);
         if (opened.text) inserter.push(opened.text);
         inserter.finish();
         console.info("[ai] recovered continuation", {
           gen: marker.gen,
           chars: opened.text?.length ?? 0,
-          finishReason: opened.finishReason,
         });
         toast("A continuation finished while you were away — it's in place.");
       } catch (err) {

@@ -151,10 +151,10 @@ function BookUnavailable({ onBack }: { onBack: () => void }) {
  */
 /**
  * Set once the writer has seen, and continued past, the note that AI
- * continuations cannot be end-to-end encrypted. Local to the device on
+ * continuations are decrypted at the AI server. Local to the device on
  * purpose: the server has no business keeping a record of who was told what.
  */
-const AI_DISCLOSURE_KEY = "layton:ai-disclosure-seen";
+const AI_DISCLOSURE_KEY = "layton:ai-disclosure-v2-seen";
 
 const SAFE_TOP = "env(safe-area-inset-top, 0px)";
 const SAFE_BOTTOM = "env(safe-area-inset-bottom, 0px)";
@@ -387,7 +387,7 @@ function BookWorkspace({
 
   /**
    * Continue the story from the caret. The first press ever stops at a short
-   * disclosure — this is the one feature that sends prose out unsealed — and
+   * disclosure — this feature lets the AI server read the prose — and
    * the accepting click comes back through here to actually run.
    */
   async function continueWithAi(attempt = 0) {
@@ -400,11 +400,14 @@ function BookWorkspace({
     setAiBusy(true);
     let inserter: StreamInserter | null = null;
     let gen: string | null = null;
+    let resultKey: Uint8Array | undefined;
     try {
       const session = await prepareContinuation();
       gen = session.gen;
-      const wrapped = await sync.sealBytesForBook(session.resKeyRaw);
-      session.resKeyRaw.fill(0);
+      resultKey = session.resKeyRaw;
+      const wrapped = await sync.sealBytesForBook(resultKey);
+      // Keep the key until the request (and any rehandshake) has been sealed.
+      // Wiping here would send an all-zero result key and strand this marker.
       // The prompt reads the caret, so capture it before the marker moves in.
       const prompt = promptBeforeCursor(view, doc, activeId, title);
       placePendingMarker(view, session.gen, wrapped);
@@ -452,6 +455,8 @@ function BookWorkspace({
           err instanceof Error ? err.message : "The model could not be reached.",
         );
       }
+    } finally {
+      resultKey?.fill(0);
     }
     aiStopRef.current = null;
     setAiBusy(false);
@@ -677,9 +682,10 @@ function BookWorkspace({
           <DialogHeader>
             <DialogTitle>Continue with AI</DialogTitle>
             <DialogDescription>
-              The model has to read your text to continue it, so these requests
-              can&apos;t be end-to-end encrypted. They aren&apos;t linked to
-              your account or kept.
+              Your text is encrypted to the AI server, where the model reads it
+              to continue your story. Replies are encrypted too. Our relay checks
+              you’re signed in, but sends no account identity to the model.
+              Encrypted results can be recovered for 14 days if your tab closes.
             </DialogDescription>
           </DialogHeader>
           <Button

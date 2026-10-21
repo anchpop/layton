@@ -63,11 +63,12 @@ export function randomKeyBytes(): Uint8Array {
 export async function seal(
   key: CryptoKey,
   plaintext: Uint8Array,
+  additionalData?: Uint8Array,
 ): Promise<Uint8Array> {
   const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
   const ciphertext = new Uint8Array(
     await crypto.subtle.encrypt(
-      { name: "AES-GCM", iv },
+      { name: "AES-GCM", iv, additionalData: additionalData && bufferSource(additionalData) },
       key,
       bufferSource(plaintext),
     ),
@@ -83,6 +84,7 @@ export async function seal(
 export async function unseal(
   key: CryptoKey,
   envelope: Uint8Array,
+  additionalData?: Uint8Array,
 ): Promise<Uint8Array> {
   if (envelope.length <= 1 + IV_BYTES) {
     throw new Error("Truncated envelope");
@@ -91,7 +93,8 @@ export async function unseal(
     throw new Error(`Unknown envelope version ${envelope[0]}`);
   }
   const plaintext = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: bufferSource(envelope.subarray(1, 1 + IV_BYTES)) },
+    { name: "AES-GCM", iv: bufferSource(envelope.subarray(1, 1 + IV_BYTES)),
+        additionalData: additionalData && bufferSource(additionalData) },
     key,
     bufferSource(envelope.subarray(1 + IV_BYTES)),
   );

@@ -10,6 +10,7 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "deploy": "pnpm run build && wrangler deploy",
+    "test:ai": "tsx --test tests/ai-protocol.test.ts",
     "test:mcp": "tsx --test tests/mcp.test.ts tests/mcp.integration.test.ts",
     "dev:mcp": "CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV=false wrangler dev --port 8787 --local-upstream localhost:8787 --upstream-protocol http --var MCP_ORIGIN:http://localhost:8787",
     "typegen": "CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV=false wrangler types worker/env.d.ts --include-runtime=false --strict-vars=false"
