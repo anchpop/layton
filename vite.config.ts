@@ -89,7 +89,10 @@ export default defineConfig({
     }),
   ],
   resolve: {
-    alias: { "@": path.resolve(__dirname, "./src") },
+    alias: [
+      { find: "@", replacement: path.resolve(import.meta.dirname, "./src") },
+      { find: /^loro-crdt$/, replacement: path.resolve(import.meta.dirname, "./src/lib/loro.ts") },
+    ],
   },
   server: {
     // /api is the Worker's route (worker/index.ts), which Vite doesn't run —

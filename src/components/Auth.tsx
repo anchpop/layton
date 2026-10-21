@@ -13,7 +13,17 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 
-export function Auth({ redirectTo = window.location.origin }: { redirectTo?: string }) {
+/**
+ * `embedded` is the same form inside the "sign in to sync" dialog, which
+ * supplies its own heading and sits over a writer's open chapter.
+ */
+export function Auth({
+  redirectTo = window.location.origin,
+  embedded = false,
+}: {
+  redirectTo?: string;
+  embedded?: boolean;
+}) {
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -62,12 +72,16 @@ export function Auth({ redirectTo = window.location.origin }: { redirectTo?: str
   }
 
   return (
-    <div className="flex min-h-full items-center justify-center px-5 py-12">
+    <div className={embedded ? "" : "flex min-h-full items-center justify-center px-5 py-12"}>
       <div className="w-full max-w-sm">
-        <h1 className="font-prose text-3xl tracking-tight">Layton</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          A quiet place to write, on every device you own.
-        </p>
+        {!embedded && (
+          <>
+            <h1 className="font-prose text-3xl tracking-tight">Layton</h1>
+            <p className="mt-2 text-sm text-muted-foreground">
+              A quiet place to write, on every device you own.
+            </p>
+          </>
+        )}
 
         {sent ? (
           <div className="mt-8 rounded-lg border p-4 text-sm text-muted-foreground">
@@ -156,16 +170,18 @@ export function Auth({ redirectTo = window.location.origin }: { redirectTo?: str
           </div>
         )}
 
-        <footer className="mt-8 border-t pt-4 text-xs text-muted-foreground">
-          <a
-            href="https://github.com/anchpop/layton"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="rounded-sm underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
-          >
-            GitHub
-          </a>
-        </footer>
+        {!embedded && (
+          <footer className="mt-8 border-t pt-4 text-xs text-muted-foreground">
+            <a
+              href="https://github.com/anchpop/layton"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded-sm underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
+            >
+              GitHub
+            </a>
+          </footer>
+        )}
       </div>
     </div>
   );

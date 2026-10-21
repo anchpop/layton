@@ -116,7 +116,7 @@ export function Editor({ doc, containerId, chapterId, onViewReady }: Props) {
     onViewReady?.(view);
 
     // Take focus only if nothing else wants it. Creating a chapter puts the
-    // caret in the sidebar's rename field and mounts this editor in the same
+    // caret in the chapter heading and mounts this editor in the same
     // commit — focusing unconditionally would yank the caret out mid-word.
     const active = document.activeElement;
     if (!active || active === document.body) view.focus();

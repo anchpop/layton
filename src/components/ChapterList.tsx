@@ -11,7 +11,6 @@ import type { LoroDoc } from "loro-crdt";
 
 import type { ChapterIndexEntry } from "@/lib/book";
 import {
-  addChapter,
   deleteChapter,
   moveChapter,
   renameChapter,
@@ -43,47 +42,25 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
+import { useTitleEdit } from "@/hooks/useTitleEdit";
 
 type Props = {
   doc: LoroDoc;
   chapters: ChapterIndexEntry[];
   activeId: string | null;
-  /** `closePanel: false` keeps the mobile drawer open — used when creating a
-   *  chapter, because the rename field lives inside that drawer. */
-  onSelect: (id: string, opts?: { closePanel?: boolean }) => void;
+  onSelect: (id: string) => void;
+  onCreate: () => void;
 };
 
-export function ChapterList({ doc, chapters, activeId, onSelect }: Props) {
+export function ChapterList({ doc, chapters, activeId, onSelect, onCreate }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [overIndex, setOverIndex] = useState<number | null>(null);
   const [pendingDelete, setPendingDelete] = useState<ChapterIndexEntry | null>(
     null,
   );
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  // Same reason as the book title: Escape has to survive a synchronous blur.
-  const renameCancelled = useRef(false);
-
-  useEffect(() => {
-    if (editingId) inputRef.current?.select();
-  }, [editingId]);
-
   function startRename(chapter: ChapterIndexEntry) {
-    renameCancelled.current = false;
     setEditingId(chapter.id);
-    setDraft(chapter.title);
-  }
-
-  function commitRename() {
-    if (renameCancelled.current) {
-      renameCancelled.current = false;
-      setEditingId(null);
-      return;
-    }
-    if (!editingId) return;
-    renameChapter(doc, editingId, draft.trim());
-    setEditingId(null);
   }
 
   function onDrop(target: number) {
@@ -99,13 +76,7 @@ export function ChapterList({ doc, chapters, activeId, onSelect }: Props) {
       <SidebarGroupLabel>Chapters</SidebarGroupLabel>
       <SidebarGroupAction
         title="New chapter"
-        onClick={() => {
-          const created = addChapter(doc, "");
-          onSelect(created.id, { closePanel: false });
-          renameCancelled.current = false;
-          setEditingId(created.id);
-          setDraft("");
-        }}
+        onClick={onCreate}
       >
         <Plus />
         <span className="sr-only">New chapter</span>
@@ -141,21 +112,12 @@ export function ChapterList({ doc, chapters, activeId, onSelect }: Props) {
               )}
             >
               {editingId === chapter.id ? (
-                <input
-                  ref={inputRef}
-                  value={draft}
-                  autoFocus
-                  onChange={(e) => setDraft(e.target.value)}
-                  onBlur={commitRename}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") e.currentTarget.blur();
-                    if (e.key === "Escape") {
-                      renameCancelled.current = true;
-                      e.currentTarget.blur();
-                    }
-                  }}
-                  placeholder={`Chapter ${index + 1}`}
-                  className="h-8 w-full rounded-md bg-transparent px-2 text-base outline-none ring-1 ring-sidebar-ring can-hover:text-sm"
+                <ChapterRename
+                  key={chapter.id}
+                  doc={doc}
+                  chapter={chapter}
+                  number={index + 1}
+                  onFinish={() => setEditingId(null)}
                 />
               ) : (
                 <>
@@ -260,5 +222,26 @@ export function ChapterList({ doc, chapters, activeId, onSelect }: Props) {
         </AlertDialogContent>
       </AlertDialog>
     </SidebarGroup>
+  );
+}
+
+function ChapterRename({ doc, chapter, number, onFinish }: {
+  doc: LoroDoc;
+  chapter: ChapterIndexEntry;
+  number: number;
+  onFinish: () => void;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  const edit = useTitleEdit(chapter.title, (title) => renameChapter(doc, chapter.id, title), { onFinish });
+  useEffect(() => { ref.current?.select(); }, []);
+  return (
+    <input
+      ref={ref}
+      {...edit}
+      autoFocus
+      aria-label="Rename chapter"
+      placeholder={`Chapter ${number}`}
+      className="h-8 w-full rounded-md bg-transparent px-2 text-base outline-none ring-1 ring-sidebar-ring can-hover:text-sm"
+    />
   );
 }

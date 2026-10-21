@@ -101,6 +101,7 @@ export class BookSync {
   private wrappedKey: string | null = null;
 
   private unsubscribeLocal: (() => void) | null = null;
+  private unsubscribeAuth: (() => void) | null = null;
   private snapshotTimer: ReturnType<typeof setTimeout> | null = null;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private catchUpQueued = false;
@@ -230,6 +231,13 @@ export class BookSync {
     void this.flush();
 
     window.addEventListener("online", this.handleOnline);
+    // Signing back in after a lapsed session is the same moment as the network
+    // returning: the outbox can drain. Deferred, because querying from inside
+    // this callback waits on the auth lock it runs under.
+    const { data: auth } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_IN") setTimeout(this.handleOnline, 0);
+    });
+    this.unsubscribeAuth = () => auth.subscription.unsubscribe();
     document.addEventListener("visibilitychange", this.handleVisibility);
   }
 
@@ -258,6 +266,12 @@ export class BookSync {
     // has simply never seen and cannot reach — is an instruction that cannot
     // work, however politely it is phrased.
     if (!wrapped) return "unavailable";
+    // Written down before opening, so a wrapper this device can no longer
+    // open is remembered as such offline too — the same rule recheckWrapper
+    // follows.
+    if (wrapped !== local?.wrappedKey) {
+      await updateLocalWrappedKey(this.bookId, wrapped);
+    }
 
     const opened = await openBookKey(wrapped);
     if (!opened) return "locked";
@@ -286,6 +300,7 @@ export class BookSync {
 
   destroy(): void {
     this.destroyed = true;
+    this.unsubscribeAuth?.();
     this.unsubscribeLocal?.();
     this.unsubscribeLocal = null;
     if (this.snapshotTimer) clearTimeout(this.snapshotTimer);

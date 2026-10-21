@@ -7,7 +7,46 @@ import { createClient } from "@supabase/supabase-js";
 const url = import.meta.env.VITE_SUPABASE_URL;
 const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
+/**
+ * Refuses to query the database as nobody.
+ *
+ * With no session, supabase-js quietly sends the publishable key in place of a
+ * user's token, and row-level security answers that anonymous query with
+ * *success and no rows*. Every reader here would take that at its word: no
+ * key record means "set up a new master password", no books means an empty
+ * shelf, a delete that matched nothing means it worked. A session lapses
+ * whenever a refresh is rejected — routinely on a plane — so that answer is
+ * not hypothetical. Turning it into an error at the one place every request
+ * passes makes the whole class impossible, rather than guarding each caller.
+ *
+ * Answered with a 401 rather than a rejected fetch: postgrest-js retries a
+ * failed fetch with seconds of backoff, which would hold a book's opening on
+ * a question that has no answer. The shared-story reader is the single
+ * anonymous request, by design.
+ */
+const signedInFetch: typeof fetch = (input, init) => {
+  const path = new URL(input instanceof Request ? input.url : input).pathname;
+  const bearer = new Headers(init?.headers).get("Authorization");
+  if (
+    (!bearer || bearer === `Bearer ${key}`) &&
+    path.startsWith("/rest/v1/") &&
+    path !== "/rest/v1/rpc/shared_book_payload"
+  ) {
+    return Promise.resolve(
+      Response.json(
+        {
+          code: "signed_out",
+          message: "Signed out — sign in to sync. Your writing is on this device.",
+        },
+        { status: 401 },
+      ),
+    );
+  }
+  return fetch(input, init);
+};
+
 export const supabase = createClient(url, key, {
+  global: { fetch: signedInFetch },
   auth: {
     persistSession: true,
     autoRefreshToken: true,

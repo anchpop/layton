@@ -1,12 +1,13 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 
-import { useAuth, type AuthUser } from "@/hooks/useAuth";
+import { useAuth, type AuthUser, type SessionStatus } from "@/hooks/useAuth";
 import { usePasskeyGate } from "@/hooks/usePasskeyGate";
 import { useVault } from "@/hooks/useVault";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { McpConnect } from "@/components/McpConnect";
 import { Auth } from "@/components/Auth";
+import { SessionNotice } from "@/components/SessionNotice";
 import { Library } from "@/components/Library";
 import { PasskeySetup } from "@/components/PasskeySetup";
 import { VaultSetup } from "@/components/VaultSetup";
@@ -30,7 +31,7 @@ const SharedStory = lazy(() =>
 );
 
 export default function App() {
-  const { user, loading, offline } = useAuth();
+  const { user, loading, status } = useAuth();
 
   return (
     <ThemeProvider>
@@ -50,7 +51,7 @@ export default function App() {
         <Routes>
           <Route path="/connect" element={loading ? (
             <div className="p-8 text-sm text-muted-foreground">Loading…</div>
-          ) : !user ? <Auth redirectTo={window.location.href} /> : (
+          ) : !user || status !== "live" ? <Auth redirectTo={window.location.href} /> : (
             <McpConnect key={user.id} userId={user.id} email={user.email} />
           )} />
           {/* A shared story answers to its link alone. It sits outside the
@@ -90,7 +91,7 @@ export default function App() {
                 // here belongs to exactly one account, and remounting is the
                 // only way to say that which cannot be got wrong by an effect
                 // running a render too late.
-                <SignedIn key={user.id} user={user} offline={offline} />
+                <SignedIn key={user.id} user={user} status={status} />
               )
             }
           />
@@ -101,12 +102,14 @@ export default function App() {
   );
 }
 
-function SignedIn({ user, offline }: { user: AuthUser; offline: boolean }) {
+function SignedIn({ user, status }: { user: AuthUser; status: SessionStatus }) {
+  const notice = status === "expired" ? <SessionNotice /> : null;
   const { id: userId, email } = user;
-  // Skip the passkey check when we are running on a remembered sign-in — it
-  // needs the network, and nothing should stand between an offline writer and
-  // their chapter.
-  const passkeyGate = usePasskeyGate(offline ? null : userId);
+  // The passkey offer needs the network, and only belongs at the door: skip it
+  // on a remembered sign-in, and never let signing back in mid-chapter swap
+  // the editor out for an enrollment screen.
+  const [liveOnEntry] = useState(status === "live");
+  const passkeyGate = usePasskeyGate(liveOnEntry ? userId : null);
   const { gate: vault, recheck: recheckVault } = useVault(userId);
 
   // Ask once, immediately after a first sign-in, before the library appears.
@@ -130,7 +133,10 @@ function SignedIn({ user, offline }: { user: AuthUser; offline: boolean }) {
   if (vault === "setup") return <VaultSetup userId={userId} email={email} />;
   if (vault === "locked") {
     return (
-      <VaultUnlock userId={userId} email={email} onErased={recheckVault} />
+      <>
+        <div className="px-5">{notice}</div>
+        <VaultUnlock userId={userId} email={email} onErased={recheckVault} />
+      </>
     );
   }
 
@@ -139,7 +145,7 @@ function SignedIn({ user, offline }: { user: AuthUser; offline: boolean }) {
   // session. Everything signed-in resolves here.
   return (
     <Routes>
-      <Route path="/" element={<Library userId={userId} email={email} />} />
+      <Route path="/" element={<Library userId={userId} email={email} notice={notice} />} />
       <Route
         path="/b/:bookId"
         element={
@@ -153,7 +159,7 @@ function SignedIn({ user, offline }: { user: AuthUser; offline: boolean }) {
                 </div>
               }
             >
-              <BookView userId={userId} />
+              <BookView userId={userId} notice={notice} />
             </Suspense>
           </ChunkBoundary>
         }

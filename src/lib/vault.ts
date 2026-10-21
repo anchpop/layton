@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { forgetUser } from "./auth";
 import { base64ToBytes, bytesToBase64 } from "./bytes";
 import {
   KDF_ITERATIONS,
@@ -398,9 +399,14 @@ export function lockPrivate(): void {
  * afterwards leaves a window in which closing the tab aborts the IndexedDB
  * delete, and the next sign-in would then resume without ever asking for the
  * master password — silently breaking the one promise sign-out makes.
+ *
+ * Forgetting who uses this device happens here too, and only here: Supabase
+ * also announces SIGNED_OUT when it merely drops a session it could not
+ * refresh, and that must leave the writer at their desk (see useAuth).
  */
 export async function signOut(): Promise<void> {
   await forgetThisDevice();
+  forgetUser();
   await supabase.auth.signOut();
 }
 

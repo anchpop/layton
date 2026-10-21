@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useNavigate } from "react-router";
 import { Archive, Lock, LockOpen, Plus } from "lucide-react";
 import { toast } from "sonner";
@@ -37,7 +37,7 @@ function formatWhen(iso: string): string {
   });
 }
 
-export function Library({ userId, email }: { userId: string; email: string }) {
+export function Library({ userId, email, notice }: { userId: string; email: string; notice?: ReactNode }) {
   const { books, loading, error, createBook, setArchived, setPrivate } =
     useLibrary(userId);
   const { privateUnlocked } = useVaultStatus();
@@ -123,6 +123,7 @@ export function Library({ userId, email }: { userId: string; email: string }) {
           <ThemeToggle className="text-muted-foreground" />
         </div>
       </header>
+      {notice}
 
       {asking && !privateUnlocked && (
         <div className="mt-6 rounded-lg border p-4">

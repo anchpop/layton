@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { flushSync } from "react-dom";
+import { TextSelection } from "prosemirror-state";
 import { useNavigate, useParams } from "react-router";
 import {
   ChevronDown,
@@ -20,6 +22,7 @@ import {
   useSyncState,
 } from "@/hooks/useBook";
 import { useVaultStatus } from "@/hooks/useVault";
+import { useTitleEdit } from "@/hooks/useTitleEdit";
 import {
   addChapter,
   bodyContainerId,
@@ -69,6 +72,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Editor } from "./Editor";
 import { ChapterList } from "./ChapterList";
+import { ChapterTitle } from "./ChapterTitle";
 import { SyncBadge } from "./SyncBadge";
 import { ThemeToggle } from "./ThemeToggle";
 import { UnlockPrivate } from "./UnlockPrivate";
@@ -158,7 +162,7 @@ const SAFE_BOTTOM = "env(safe-area-inset-bottom, 0px)";
 const SAFE_LEFT = "env(safe-area-inset-left, 0px)";
 const SAFE_RIGHT = "env(safe-area-inset-right, 0px)";
 
-export function BookView({ userId }: { userId: string }) {
+export function BookView({ userId, notice }: { userId: string; notice?: ReactNode }) {
   const { bookId } = useParams<{ bookId: string }>();
   // Focus mode lives above the provider so the class can wrap *both* the
   // sidebar and the editor. On SidebarInset alone it could never reach the
@@ -205,6 +209,7 @@ export function BookView({ userId }: { userId: string }) {
       <BookWorkspace
         bookId={bookId}
         userId={userId}
+        notice={notice}
         focusMode={focusMode}
         setFocusMode={setFocusMode}
         setSidebarOpen={setSidebarOpen}
@@ -214,12 +219,14 @@ export function BookView({ userId }: { userId: string }) {
 }
 
 function BookWorkspace({
+  notice,
   bookId,
   userId,
   focusMode,
   setFocusMode,
   setSidebarOpen,
 }: {
+  notice?: ReactNode;
   bookId: string;
   userId: string;
   focusMode: boolean;
@@ -291,11 +298,11 @@ function BookWorkspace({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const [titleDraft, setTitleDraft] = useState<string | null>(null);
-  // Set by Escape. `setTitleDraft(null)` cannot do this job: blur() fires
-  // synchronously and its handler still sees the pre-Escape draft, so the
-  // cancelled edit would be saved anyway.
-  const titleEditCancelled = useRef(false);
+  const titleEdit = useTitleEdit(title, (value) => {
+    if (doc) setTitle(doc, value || "Untitled");
+  });
+  const [newChapterId, setNewChapterId] = useState<string | null>(null);
+  const skipDrawerRestore = useRef(false);
   const [words, setWords] = useState(0);
 
   // Keep a valid selection as chapters appear, disappear, or arrive from
@@ -310,10 +317,13 @@ function BookWorkspace({
     }
   }, [chapters, activeId]);
 
+  // Null for the render between a remote edit removing the selected chapter
+  // and the effect above choosing another — nothing may draw a missing one.
+  const activeChapter = chapters.find((chapter) => chapter.id === activeId);
   const containerId: ContainerID | null = useMemo(() => {
-    if (!doc || !activeId) return null;
-    return bodyContainerId(doc, activeId);
-  }, [doc, activeId, chapters.length]);
+    if (!doc || !activeChapter) return null;
+    return bodyContainerId(doc, activeChapter.id);
+  }, [doc, activeChapter]);
 
   // A moment after a chapter opens, ask its pending AI markers whether their
   // continuations finished while nobody was watching — collect the ones that
@@ -346,14 +356,33 @@ function BookWorkspace({
     return () => clearTimeout(id);
   }, [sync, title, syncState.status]);
 
-  /**
-   * Picking a chapter to read closes the drawer on a phone. Creating one does
-   * not: the sidebar is where you name it, and closing the drawer would unmount
-   * the rename field before you could type in it.
-   */
-  function selectChapter(id: string, { closePanel = true } = {}) {
+  function selectChapter(id: string) {
+    setNewChapterId(null);
     setActiveId(id);
-    if (isMobile && closePanel) setOpenMobile(false);
+    if (isMobile) setOpenMobile(false);
+  }
+
+  function createChapter() {
+    if (!doc) return;
+    if (isMobile && openMobile) {
+      // Release the drawer's focus trap before the heading mounts. Two commits
+      // keep autofocus inside this click (and iOS's keyboard gesture), without
+      // an animation timer or the old trap pulling the caret back inside.
+      skipDrawerRestore.current = true;
+      flushSync(() => setOpenMobile(false));
+    }
+    flushSync(() => {
+      const chapter = addChapter(doc, "");
+      setNewChapterId(chapter.id);
+      setActiveId(chapter.id);
+    });
+  }
+
+  function focusProse() {
+    const view = editorViewRef.current;
+    if (!view) return;
+    view.dispatch(view.state.tr.setSelection(TextSelection.atStart(view.state.doc)).scrollIntoView());
+    view.focus();
   }
 
   /**
@@ -448,7 +477,15 @@ function BookWorkspace({
 
   return (
     <>
-      <Sidebar collapsible="offcanvas">
+      <Sidebar
+        collapsible="offcanvas"
+        onMobileCloseAutoFocus={(event) => {
+          if (skipDrawerRestore.current) {
+            event.preventDefault();
+            skipDrawerRestore.current = false;
+          }
+        }}
+      >
         <SidebarHeader
           className="gap-2"
           style={{ paddingTop: `calc(0.5rem + ${SAFE_TOP})` }}
@@ -464,24 +501,7 @@ function BookWorkspace({
           </Button>
 
           <Input
-            value={titleDraft ?? title}
-            onChange={(e) => setTitleDraft(e.target.value)}
-            onFocus={() => setTitleDraft(title)}
-            onBlur={() => {
-              if (titleEditCancelled.current) {
-                titleEditCancelled.current = false;
-              } else if (doc && titleDraft != null) {
-                setTitle(doc, titleDraft.trim() || "Untitled");
-              }
-              setTitleDraft(null);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") e.currentTarget.blur();
-              if (e.key === "Escape") {
-                titleEditCancelled.current = true;
-                e.currentTarget.blur();
-              }
-            }}
+            {...titleEdit}
             placeholder="Untitled"
             aria-label="Book title"
             className="h-auto border-0 bg-transparent px-2 py-1 font-prose !text-lg shadow-none focus-visible:ring-0 dark:bg-transparent"
@@ -496,6 +516,7 @@ function BookWorkspace({
               chapters={chapters}
               activeId={activeId}
               onSelect={selectChapter}
+              onCreate={createChapter}
             />
           )}
         </SidebarContent>
@@ -514,6 +535,7 @@ function BookWorkspace({
               <BookPrivacy sync={sync} isPrivate={syncState.isPrivate} />
             </>
           )}
+          {notice}
           <div className="flex items-center justify-between">
             <span>{words.toLocaleString()} words</span>
             <SyncBadge state={syncState} />
@@ -611,13 +633,23 @@ function BookWorkspace({
 
         {/* SidebarInset already renders <main>; a nested one would be invalid. */}
         <div className="min-h-0 flex-1 overflow-y-auto">
-          {doc && activeId && containerId ? (
-            <Editor
-              doc={doc}
-              containerId={containerId}
-              chapterId={activeId}
-              onViewReady={handleViewReady}
-            />
+          {doc && activeChapter && containerId ? (
+            <>
+              <ChapterTitle
+                key={activeChapter.id}
+                doc={doc}
+                chapter={activeChapter}
+                number={chapters.indexOf(activeChapter) + 1}
+                autoFocus={newChapterId === activeId}
+                onEnter={focusProse}
+              />
+              <Editor
+                doc={doc}
+                containerId={containerId}
+                chapterId={activeChapter.id}
+                onViewReady={handleViewReady}
+              />
+            </>
           ) : (
             <div className="flex h-full items-center justify-center px-6">
               {syncState.status === "loading" ? (
@@ -629,11 +661,7 @@ function BookWorkspace({
                   </p>
                   <Button
                     className="mt-4"
-                    onClick={() => {
-                      if (!doc) return;
-                      const created = addChapter(doc, "Chapter One");
-                      setActiveId(created.id);
-                    }}
+                    onClick={createChapter}
                   >
                     Begin chapter one
                   </Button>

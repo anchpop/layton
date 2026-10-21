@@ -1,4 +1,6 @@
+import type { BookRow } from "./supabase";
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
+import { toast } from "sonner";
 
 /**
  * Local durability. Four responsibilities:
@@ -65,6 +67,7 @@ type VaultRecord = {
 };
 
 interface LaytonDB extends DBSchema {
+  libraries: { key: string; value: { userId: string; rows: BookRow[] } };
   books: {
     key: string;
     value: BookLocal;
@@ -91,7 +94,7 @@ const DB_NAME = "layton";
  * one at a time. They are cleared on upgrade instead: there is no key that can
  * decrypt them, because none existed when they were written.
  */
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 let dbPromise: Promise<IDBPDatabase<LaytonDB>> | null = null;
 
@@ -118,6 +121,21 @@ function db() {
           database.createObjectStore("deviceKeys", { keyPath: "userId" });
           database.createObjectStore("vaults", { keyPath: "userId" });
         }
+        if (oldVersion < 3) {
+          database.createObjectStore("libraries", { keyPath: "userId" });
+        }
+      },
+      // A tab still holding the old version stalls this open until it closes.
+      // Tabs from here on step aside for a newer version themselves; older
+      // ones never learned to, so ask for them to be closed.
+      blocked() {
+        toast("Close Layton's other tabs to finish updating.", {
+          duration: Infinity,
+        });
+      },
+      blocking() {
+        void dbPromise?.then((database) => database.close());
+        dbPromise = null;
       },
     });
   }
@@ -151,6 +169,17 @@ export async function updateLocalWrappedKey(
   wrappedKey: string,
 ): Promise<void> {
   const database = await db();
+  // The cached shelf carries the wrapper too. Left stale, a book just made
+  // private would still open under the everyday key there, and its title
+  // would be listed while private books are locked.
+  const shelves = database.transaction("libraries", "readwrite");
+  for await (const cursor of shelves.store) {
+    const rows = cursor.value.rows.map((row) =>
+      row.id === bookId ? { ...row, wrapped_key: wrappedKey } : row,
+    );
+    await cursor.update({ ...cursor.value, rows });
+  }
+  await shelves.done;
   const existing = await database.get("books", bookId);
   if (!existing) return;
   await database.put("books", { ...existing, wrappedKey });
@@ -226,3 +255,17 @@ export async function forgetVaultRecord(userId: string): Promise<void> {
 }
 
 export type { BookLocal, OutboxEntry, VaultRecord };
+
+/**
+ * The last library listing the server gave this account, so the shelf opens
+ * offline. Rows exactly as they arrived — titles and keys still sealed — so
+ * holding them here reveals nothing the books store does not already. Every
+ * successful fetch replaces it whole; a stale entry lives only until then.
+ */
+export async function loadLibrary(userId: string): Promise<BookRow[]> {
+  return (await (await db()).get("libraries", userId))?.rows ?? [];
+}
+
+export async function saveLibrary(userId: string, rows: BookRow[]): Promise<void> {
+  await (await db()).put("libraries", { userId, rows });
+}

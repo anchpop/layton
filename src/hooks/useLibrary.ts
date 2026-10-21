@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { loadLibrary, saveLibrary } from "../lib/localStore";
 import { supabase, type BookRow } from "../lib/supabase";
 import { sealText, unsealText } from "../lib/crypto";
 import {
@@ -44,46 +45,54 @@ export function useLibrary(userId: string | null) {
   const refresh = useCallback(async () => {
     if (!userId) return;
     const run = ++latest.current;
+    // The shelf as last seen, first: it is sealed exactly like the server's
+    // copy, and showing it does not wait on a network that may not be there.
+    const cached = await loadLibrary(userId);
+    if (cached.length > 0) await show(cached);
     const { data, error: err } = await supabase
       .from("books")
       .select("*")
       .is("archived_at", null)
       .order("updated_at", { ascending: false });
-
+    if (run !== latest.current) return;
     if (err) {
-      if (run === latest.current) {
-        setError(err.message);
-        setLoading(false);
-      }
+      // Offline or signed out, the cached shelf stands and the next refresh
+      // retries. With nothing cached there is nothing to stand on: say so.
+      if (cached.length === 0) setError(err.message);
+      setLoading(false);
       return;
     }
-
     const rows = (data ?? []) as BookRow[];
-    const visible: LibraryBook[] = [];
-    for (const row of rows) {
-      const opened = await openBookKey(row.wrapped_key);
-      if (!opened) continue;
-      visible.push({
-        id: row.id,
-        title: await readTitle(opened.key, row.title_cipher),
-        updated_at: row.updated_at,
-        isPrivate: opened.isPrivate,
-        wrappedKey: row.wrapped_key,
-      });
-    }
+    await saveLibrary(userId, rows);
+    await show(rows);
 
-    if (run !== latest.current) return;
-    // Checked here rather than at the top, against the vault as it is *now*:
-    // decrypting a page of titles takes long enough for the lock to have
-    // happened in between, and a row read while unlocked must not be rendered
-    // by a callback that returns after.
-    setBooks(
-      vaultStatus().privateUnlocked
-        ? visible
-        : visible.filter((book) => !book.isPrivate),
-    );
-    setError(null);
-    setLoading(false);
+    async function show(rows: BookRow[]) {
+      const visible: LibraryBook[] = [];
+      for (const row of rows) {
+        const opened = await openBookKey(row.wrapped_key);
+        if (!opened) continue;
+        visible.push({
+          id: row.id,
+          title: await readTitle(opened.key, row.title_cipher),
+          updated_at: row.updated_at,
+          isPrivate: opened.isPrivate,
+          wrappedKey: row.wrapped_key,
+        });
+      }
+
+      if (run !== latest.current) return;
+      // Checked here rather than at the top, against the vault as it is *now*:
+      // decrypting a page of titles takes long enough for the lock to have
+      // happened in between, and a row read while unlocked must not be rendered
+      // by a callback that returns after.
+      setBooks(
+        vaultStatus().privateUnlocked
+          ? visible
+          : visible.filter((book) => !book.isPrivate),
+      );
+      setError(null);
+      setLoading(false);
+    }
   }, [userId]);
 
   useEffect(() => {
@@ -97,6 +106,21 @@ export function useLibrary(userId: string | null) {
     }
     void refresh();
   }, [refresh, privateUnlocked]);
+
+  // Signing back in, or the network returning, is when the shelf can catch up.
+  useEffect(() => {
+    const recover = () => void refresh();
+    const { data } = supabase.auth.onAuthStateChange((event) => {
+      // Deferred: a query from inside this callback waits on the auth lock the
+      // callback is being run under.
+      if (event === "SIGNED_IN") setTimeout(recover, 0);
+    });
+    window.addEventListener("online", recover);
+    return () => {
+      data.subscription.unsubscribe();
+      window.removeEventListener("online", recover);
+    };
+  }, [refresh]);
 
   const createBook = useCallback(
     async (title: string, isPrivate = false): Promise<LibraryBook | null> => {
