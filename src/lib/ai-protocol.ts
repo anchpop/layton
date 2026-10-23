@@ -15,7 +15,6 @@ const utf8 = new TextEncoder();
 const text = new TextDecoder("utf-8", { fatal: true });
 const encode = (value: unknown) => utf8.encode(JSON.stringify(value));
 export type KeyStatement = { version: number; keyId: string; publicKey: string; expiresAt: number; signature: string };
-let cached: KeyStatement | undefined;
 
 export async function verifyStatement(statement: KeyStatement, pin = AI_SIGNING_SPKI, now = Date.now() / 1000): Promise<void> {
   if (statement.version !== VERSION || !/^[0-9a-f]{32}$/.test(statement.keyId) ||
@@ -28,21 +27,6 @@ export async function verifyStatement(statement: KeyStatement, pin = AI_SIGNING_
     base64ToBytes(statement.signature) as BufferSource,
     encode([VERSION, statement.keyId, statement.publicKey, statement.expiresAt]) as BufferSource);
   if (!valid) throw new Error("AI server signature did not verify");
-}
-
-export async function serverStatement(token: string, refresh = false): Promise<KeyStatement> {
-  if (!refresh && cached && cached.expiresAt > Date.now() / 1000 + 15) return cached;
-  const response = await fetch("/api/ai-key", { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
-  // The relay's own words ("Sign in to use this.", "The model is unavailable…")
-  // say which hop failed; a generic message hid that.
-  if (!response.ok) {
-    const body = await response.json().catch(() => null) as { error?: string } | null;
-    throw new Error(body?.error ?? `The AI server key could not be reached (${response.status}).`);
-  }
-  const statement = await response.json() as KeyStatement;
-  await verifyStatement(statement);
-  cached = statement;
-  return statement;
 }
 
 export type ContinuationSession = {

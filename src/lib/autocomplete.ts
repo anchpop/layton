@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { supabase } from "./supabase";
 import { schema } from "./schema";
 import { importContentKey } from "./crypto";
-import { handshake, ModelFailed, serverStatement, sealRequest, StreamVerifier, openResult, VERSION, type ContinuationSession } from "./ai-protocol";
+import { handshake, ModelFailed, sealRequest, StreamVerifier, openResult, verifyStatement, VERSION, type ContinuationSession, type KeyStatement } from "./ai-protocol";
 export type { ContinuationSession } from "./ai-protocol";
 import { chapterText, readChapters } from "./book";
 
@@ -56,12 +56,50 @@ export function saveAiLength(tokens: number): void {
   localStorage.setItem(LENGTH_KEY, String(tokens));
 }
 
+/**
+ * A request to the AI relay as the signed-in writer.
+ *
+ * The relay asks Supabase whether the token is a live session, and a client
+ * can hold one Supabase has stopped accepting (see lib/auth.ts on lost
+ * refreshes). So a 401 gets one refresh and one retry. A refresh that is
+ * refused too means the session really is over: supabase-js signs out, and the
+ * app's session notice takes it from there.
+ */
+async function relay(path: string, init: RequestInit = {}): Promise<Response> {
+  const send = (token: string) => {
+    const headers = new Headers(init.headers);
+    headers.set("Authorization", `Bearer ${token}`);
+    return fetch(path, { ...init, headers });
+  };
+  const { data } = await supabase.auth.getSession();
+  if (!data.session) throw new Error("Sign in again to use this.");
+  const res = await send(data.session.access_token);
+  if (res.status !== 401) return res;
+  const { data: refreshed } = await supabase.auth.refreshSession();
+  return refreshed.session ? send(refreshed.session.access_token) : res;
+}
+
+let cachedStatement: KeyStatement | undefined;
+
+/** The model container's current signed key, checked against the pinned one. */
+async function serverStatement(refresh = false): Promise<KeyStatement> {
+  if (!refresh && cachedStatement && cachedStatement.expiresAt > Date.now() / 1000 + 15) return cachedStatement;
+  const response = await relay("/api/ai-key", { cache: "no-store" });
+  // The relay's own words ("Sign in to use this.", "The model is unavailable…")
+  // say which hop failed; a generic message hid that.
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { error?: string } | null;
+    throw new Error(body?.error ?? `The AI server key could not be reached (${response.status}).`);
+  }
+  const statement = await response.json() as KeyStatement;
+  await verifyStatement(statement);
+  cachedStatement = statement;
+  return statement;
+}
+
 /** Authenticate the hourly model key before deriving any prompt keys. */
 export async function prepareContinuation(): Promise<ContinuationSession> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
-  if (!token) throw new Error("Sign in again to use this.");
-  return handshake(await serverStatement(token));
+  return handshake(await serverStatement());
 }
 
 /**
@@ -153,7 +191,6 @@ type NodeViewSpec = {
  * is — into the pending marker itself, then come back and try again.
  */
 async function waitForModel(
-  token: string,
   gen: string,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -164,9 +201,7 @@ async function waitForModel(
     for (let i = 0; i < 450; i++) {
       if (signal?.aborted) throw new GenerationStopped("Stopped.");
       await new Promise((resolve) => setTimeout(resolve, 4000));
-      const res = await fetch("/api/ai-health", {
-        headers: { Authorization: `Bearer ${token}` },
-      }).catch(() => null);
+      const res = await relay("/api/ai-health").catch(() => null);
       if (!res?.ok) continue;
       const health = (await res.json().catch(() => null)) as {
         model?: boolean;
@@ -230,21 +265,16 @@ export async function streamContinuation(
   onDelta: (text: string) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
-  if (!token) throw new Error("Sign in again to use this.");
-
   const { gen } = session;
   streaming.add(gen);
   try {
-    await relayContinuation(token, session, prompt, maxTokens, onDelta, signal);
+    await relayContinuation(session, prompt, maxTokens, onDelta, signal);
   } finally {
     streaming.delete(gen);
   }
 }
 
 async function relayContinuation(
-  token: string,
   session: ContinuationSession,
   prompt: string,
   maxTokens: number,
@@ -255,9 +285,9 @@ async function relayContinuation(
   const post = async () => {
     const req = await sealRequest(session, prompt, maxTokens);
     try {
-      return await fetch("/api/complete", {
+      return await relay("/api/complete", {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ version: VERSION, keyId: session.keyId, gen, epk: session.epk, req }),
         signal,
       });
@@ -276,10 +306,10 @@ async function relayContinuation(
   for (let rekeyed = false, waited = false; ; ) {
     if (res.status === 409 && !rekeyed) {
       rekeyed = true;
-      Object.assign(session, await handshake(await serverStatement(token, true), session));
+      Object.assign(session, await handshake(await serverStatement(true), session));
     } else if (res.status === 503 && !waited) {
       waited = true;
-      await waitForModel(token, gen, signal);
+      await waitForModel(gen, signal);
     } else break;
     res = await post();
   }
@@ -476,15 +506,8 @@ export async function recoverPendingMarkers(
   });
   if (markers.length === 0) return;
 
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
-  if (!token) return;
-
   for (const marker of markers) {
-    const res = await fetch(
-      `/api/ai-result?id=${encodeURIComponent(marker.gen)}`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    ).catch(() => null);
+    const res = await relay(`/api/ai-result?id=${encodeURIComponent(marker.gen)}`).catch(() => null);
     if (!res?.ok) continue;
     const body = (await res.json().catch(() => null)) as {
       status?: string;

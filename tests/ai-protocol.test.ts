@@ -125,7 +125,7 @@ test("relay forwards only service headers, gates every route and never caches fa
       assert.equal(headers.get("authorization"), "Bearer service-key");
       assert.equal(headers.get("cookie"), null);
       assert.equal(headers.get("x-forwarded-for"), null);
-      assert.equal(seen.at(-1)!.init!.redirect, "error");
+      assert.equal(seen.at(-1)!.init!.redirect, "manual");
       authStatus = 401;
       const denied = await relay.fetch(request(), env);
       assert.equal(denied.status, 401);
