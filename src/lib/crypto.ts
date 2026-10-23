@@ -60,6 +60,17 @@ export function randomKeyBytes(): Uint8Array {
 // The envelope
 // ---------------------------------------------------------------------------
 
+/**
+ * The AES-GCM parameters, with `additionalData` left out entirely when there is
+ * none. Chrome rejects `additionalData: undefined` as "Not a BufferSource"
+ * where Safari ignores it, so the key must be absent, not undefined.
+ */
+function gcm(iv: Uint8Array, additionalData?: Uint8Array): AesGcmParams {
+  return additionalData
+    ? { name: "AES-GCM", iv: bufferSource(iv), additionalData: bufferSource(additionalData) }
+    : { name: "AES-GCM", iv: bufferSource(iv) };
+}
+
 export async function seal(
   key: CryptoKey,
   plaintext: Uint8Array,
@@ -68,7 +79,7 @@ export async function seal(
   const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
   const ciphertext = new Uint8Array(
     await crypto.subtle.encrypt(
-      { name: "AES-GCM", iv, additionalData: additionalData && bufferSource(additionalData) },
+      gcm(iv, additionalData),
       key,
       bufferSource(plaintext),
     ),
@@ -93,8 +104,7 @@ export async function unseal(
     throw new Error(`Unknown envelope version ${envelope[0]}`);
   }
   const plaintext = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: bufferSource(envelope.subarray(1, 1 + IV_BYTES)),
-        additionalData: additionalData && bufferSource(additionalData) },
+    gcm(envelope.subarray(1, 1 + IV_BYTES), additionalData),
     key,
     bufferSource(envelope.subarray(1 + IV_BYTES)),
   );
@@ -107,6 +117,10 @@ export async function unseal(
  * The distinction matters: trying a key and having it fail is a *normal* event
  * here, not an error. It is how a private book is told apart from an ordinary
  * one without the server recording which is which.
+ *
+ * Only a failed authentication counts as "not the one". Anything else is a bug
+ * or a damaged record, and swallowing it would report it as a wrong master
+ * password — which is how a Chrome-only TypeError once locked a phone out.
  */
 export async function tryUnseal(
   key: CryptoKey,
@@ -114,8 +128,9 @@ export async function tryUnseal(
 ): Promise<Uint8Array | null> {
   try {
     return await unseal(key, envelope);
-  } catch {
-    return null;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "OperationError") return null;
+    throw error;
   }
 }
 
