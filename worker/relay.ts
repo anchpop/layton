@@ -43,7 +43,8 @@ async function signedIn(request: Request, env: Env): Promise<boolean> {
   // Is this a live session? Supabase answers; the answer goes no further.
   const who = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
     headers: { Authorization: auth, apikey: env.SUPABASE_PUBLISHABLE_KEY },
-    redirect: "error",
+    // Workers reject redirect: "error" outright; a 3xx under "manual" is not ok.
+    redirect: "manual",
   });
   return who.ok;
 }
@@ -91,7 +92,7 @@ export default {
 
       const upstream = await fetch(`${env.MODAL_URL}${path}`, {
         method: completion ? "POST" : "GET",
-        redirect: "error",
+        redirect: "manual",
         headers: {
           Authorization: `Bearer ${env.VLLM_API_KEY}`,
           ...(completion ? { "Content-Type": "application/json" } : {}),
