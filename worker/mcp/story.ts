@@ -36,9 +36,9 @@ export async function loadStoryDoc(key: CryptoKey, updates: { payload: string }[
   } catch (error) { doc.free(); throw error; }
 }
 
-export function currentChapters(doc: LoroDoc) {
+export function currentEntries(doc: LoroDoc, section: "chapters" | "notes") {
   const bodies = doc.getMap("bodies");
-  return doc.getMovableList("chapters").toArray().flatMap(entry => {
+  return doc.getMovableList(section).toArray().flatMap(entry => {
     if (!(entry instanceof LoroMap)) return [];
     const id = entry.get("id");
     if (typeof id !== "string") return [];
@@ -48,19 +48,24 @@ export function currentChapters(doc: LoroDoc) {
 
 export async function renderStory(key: CryptoKey, updates: { payload: string }[]) {
   const doc = await loadStoryDoc(key, updates);
-  try { return currentChapters(doc); } finally { doc.free(); }
+  try { return { chapters: currentEntries(doc, "chapters"), notes: currentEntries(doc, "notes") }; } finally { doc.free(); }
 }
 
 export type StoryEdit =
   | { kind: "replace_text"; chapterId: string; oldText: string; newText: string }
   | { kind: "append_to_chapter"; chapterId: string; text: string }
   | { kind: "create_chapter"; title: string; text: string }
+  | { kind: "create_note"; title: string; text: string }
   | { kind: "rename_story"; title: string }
   | { kind: "rename_chapter"; chapterId: string; title: string };
 
-function chapterEntry(doc: LoroDoc, id: string): LoroMap {
-  const entry = doc.getMovableList("chapters").toArray().find(entry => entry instanceof LoroMap && entry.get("id") === id);
-  if (!(entry instanceof LoroMap)) throw new Error("Chapter not found. Read the story again.");
+function findEntry(doc: LoroDoc, id: string) {
+  return ["chapters", "notes"].flatMap(section => doc.getMovableList(section).toArray()).find(entry => entry instanceof LoroMap && entry.get("id") === id);
+}
+
+function storyEntry(doc: LoroDoc, id: string): LoroMap {
+  const entry = findEntry(doc, id);
+  if (!(entry instanceof LoroMap)) throw new Error("Chapter or note not found. Read the story again.");
   return entry;
 }
 
@@ -93,13 +98,13 @@ function appendParagraphs(body: LoroMap, text: string) {
 export function applyStoryEdit(doc: LoroDoc, edit: StoryEdit, operationId: string, attribution: { clientId?: string; clientName?: string; connectionId: string }): Uint8Array {
   const before = doc.version();
   if (edit.kind === "rename_story") doc.getMap("meta").set("title", edit.title);
-  else if (edit.kind === "create_chapter") {
-    if (doc.getMovableList("chapters").toArray().some(entry => entry instanceof LoroMap && entry.get("id") === operationId)) throw new Error("Operation ID already used. Use a new ID for a new edit.");
-    const entry = doc.getMovableList("chapters").pushContainer(new LoroMap());
+  else if (edit.kind === "create_chapter" || edit.kind === "create_note") {
+    if (findEntry(doc, operationId)) throw new Error("Operation ID already used. Use a new ID for a new edit.");
+    const entry = doc.getMovableList(edit.kind === "create_note" ? "notes" : "chapters").pushContainer(new LoroMap());
     entry.set("id", operationId); entry.set("title", edit.title);
     appendParagraphs(doc.getMap("bodies").setContainer(operationId, new LoroMap()), edit.text);
   } else {
-    const entry = chapterEntry(doc, edit.chapterId);
+    const entry = storyEntry(doc, edit.chapterId);
     if (edit.kind === "rename_chapter") entry.set("title", edit.title);
     else {
       let body = doc.getMap("bodies").get(edit.chapterId);
@@ -139,7 +144,7 @@ export function applyStoryEdit(doc: LoroDoc, edit: StoryEdit, operationId: strin
     v: 1, source: "mcp", action: edit.kind, operationId,
     clientId: attribution.clientId, clientName: attribution.clientName ?? "MCP app",
     connectionId: attribution.connectionId,
-    ...("chapterId" in edit ? { chapterId: edit.chapterId } : edit.kind === "create_chapter" ? { chapterId: operationId } : {}),
+    ...("chapterId" in edit ? { chapterId: edit.chapterId } : (edit.kind === "create_chapter" || edit.kind === "create_note") ? { chapterId: operationId } : {}),
   }) });
   return doc.export({ mode: "update", from: before });
 }

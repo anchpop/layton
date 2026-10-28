@@ -17,14 +17,15 @@ import { toast } from "sonner";
 
 import {
   useBookSync,
-  useChapters,
+  useEntries,
   useBookTitle,
   useSyncState,
 } from "@/hooks/useBook";
 import { useVaultStatus } from "@/hooks/useVault";
 import { useTitleEdit } from "@/hooks/useTitleEdit";
 import {
-  addChapter,
+  addEntry,
+  type Section,
   bodyContainerId,
   bookWordCount,
   setTitle,
@@ -71,7 +72,7 @@ import {
 } from "@/lib/autocomplete";
 import { cn } from "@/lib/utils";
 import { Editor } from "./Editor";
-import { ChapterList } from "./ChapterList";
+import { SectionList } from "./SectionList";
 import { ChapterTitle } from "./ChapterTitle";
 import { SyncBadge } from "./SyncBadge";
 import { ThemeToggle } from "./ThemeToggle";
@@ -271,7 +272,8 @@ function BookWorkspace({
   const doc = sync?.doc ?? null;
   const syncState = useSyncState(sync);
   const { privateUnlocked } = useVaultStatus();
-  const chapters = useChapters(doc);
+  const chapters = useEntries(doc, "chapters");
+  const notes = useEntries(doc, "notes");
   const title = useBookTitle(doc);
 
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -301,29 +303,26 @@ function BookWorkspace({
   const titleEdit = useTitleEdit(title, (value) => {
     if (doc) setTitle(doc, value || "Untitled");
   });
-  const [newChapterId, setNewChapterId] = useState<string | null>(null);
+  const [newEntryId, setNewEntryId] = useState<string | null>(null);
   const skipDrawerRestore = useRef(false);
   const [words, setWords] = useState(0);
 
-  // Keep a valid selection as chapters appear, disappear, or arrive from
-  // another device.
+  // Keep a valid selection as chapters and notes appear, disappear, or arrive
+  // from another device.
   useEffect(() => {
-    if (chapters.length === 0) {
-      setActiveId(null);
-      return;
+    if (!activeId || ![...chapters, ...notes].some((entry) => entry.id === activeId)) {
+      setActiveId(chapters[0]?.id ?? notes[0]?.id ?? null);
     }
-    if (!activeId || !chapters.some((c) => c.id === activeId)) {
-      setActiveId(chapters[0].id);
-    }
-  }, [chapters, activeId]);
+  }, [chapters, notes, activeId]);
 
-  // Null for the render between a remote edit removing the selected chapter
+  // Null for the render between a remote edit removing the selected entry
   // and the effect above choosing another — nothing may draw a missing one.
-  const activeChapter = chapters.find((chapter) => chapter.id === activeId);
+  const activeSection: Section = chapters.some((entry) => entry.id === activeId) ? "chapters" : "notes";
+  const activeEntry = [...chapters, ...notes].find((entry) => entry.id === activeId);
   const containerId: ContainerID | null = useMemo(() => {
-    if (!doc || !activeChapter) return null;
-    return bodyContainerId(doc, activeChapter.id);
-  }, [doc, activeChapter]);
+    if (!doc || !activeEntry) return null;
+    return bodyContainerId(doc, activeEntry.id);
+  }, [doc, activeEntry]);
 
   // A moment after a chapter opens, ask its pending AI markers whether their
   // continuations finished while nobody was watching — collect the ones that
@@ -356,13 +355,13 @@ function BookWorkspace({
     return () => clearTimeout(id);
   }, [sync, title, syncState.status]);
 
-  function selectChapter(id: string) {
-    setNewChapterId(null);
+  function selectEntry(id: string) {
+    setNewEntryId(null);
     setActiveId(id);
     if (isMobile) setOpenMobile(false);
   }
 
-  function createChapter() {
+  function createEntry(section: Section) {
     if (!doc) return;
     if (isMobile && openMobile) {
       // Release the drawer's focus trap before the heading mounts. Two commits
@@ -372,9 +371,9 @@ function BookWorkspace({
       flushSync(() => setOpenMobile(false));
     }
     flushSync(() => {
-      const chapter = addChapter(doc, "");
-      setNewChapterId(chapter.id);
-      setActiveId(chapter.id);
+      const entry = addEntry(doc, section);
+      setNewEntryId(entry.id);
+      setActiveId(entry.id);
     });
   }
 
@@ -392,7 +391,7 @@ function BookWorkspace({
    */
   async function continueWithAi(attempt = 0) {
     const view = editorViewRef.current;
-    if (!view || !doc || !activeId || !sync || (aiBusy && attempt === 0)) return;
+    if (!view || !doc || !activeId || activeSection !== "chapters" || !sync || (aiBusy && attempt === 0)) return;
     if (!localStorage.getItem(AI_DISCLOSURE_KEY)) {
       setAiDisclosureOpen(true);
       return;
@@ -516,13 +515,19 @@ function BookWorkspace({
 
         <SidebarContent>
           {doc && (
-            <ChapterList
-              doc={doc}
-              chapters={chapters}
-              activeId={activeId}
-              onSelect={selectChapter}
-              onCreate={createChapter}
-            />
+            <>
+              {(["chapters", "notes"] as const).map((section) => (
+                <SectionList
+                  key={section}
+                  doc={doc}
+                  section={section}
+                  entries={section === "chapters" ? chapters : notes}
+                  activeId={activeId}
+                  onSelect={selectEntry}
+                  onCreate={() => createEntry(section)}
+                />
+              ))}
+            </>
           )}
         </SidebarContent>
 
@@ -565,7 +570,7 @@ function BookWorkspace({
         >
           <SidebarTrigger className="text-muted-foreground" />
           <div className="flex-1" />
-          {doc && activeId && (
+          {doc && activeEntry && activeSection === "chapters" && (
             <div className="flex items-center">
               <Button
                 variant="ghost"
@@ -638,20 +643,21 @@ function BookWorkspace({
 
         {/* SidebarInset already renders <main>; a nested one would be invalid. */}
         <div className="min-h-0 flex-1 overflow-y-auto">
-          {doc && activeChapter && containerId ? (
+          {doc && activeEntry && containerId ? (
             <>
               <ChapterTitle
-                key={activeChapter.id}
+                key={activeEntry.id}
                 doc={doc}
-                chapter={activeChapter}
-                number={chapters.indexOf(activeChapter) + 1}
-                autoFocus={newChapterId === activeId}
+                chapter={activeEntry}
+                section={activeSection}
+                number={chapters.indexOf(activeEntry) + 1}
+                autoFocus={newEntryId === activeId}
                 onEnter={focusProse}
               />
               <Editor
                 doc={doc}
                 containerId={containerId}
-                chapterId={activeChapter.id}
+                chapterId={activeEntry.id}
                 onViewReady={handleViewReady}
               />
             </>
@@ -666,7 +672,7 @@ function BookWorkspace({
                   </p>
                   <Button
                     className="mt-4"
-                    onClick={createChapter}
+                    onClick={() => createEntry("chapters")}
                   >
                     Begin chapter one
                   </Button>

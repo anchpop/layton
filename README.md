@@ -14,6 +14,8 @@ let the services you authorize read the text they need.
 - **Write offline.** Everything is stored locally first. Close the laptop mid-
   sentence on a plane, open it on your phone later, and both sides merge.
 - **Chapters.** Drag to reorder, double-click to rename, running word count.
+- **Notes.** Keep worldbuilding, characters, and outlines separate from chapters,
+  manuscript word counts, AI continuations, and shared copies.
 - **Book typesetting.** Smart quotes, em dashes (`--`), ellipses (`...`), scene
   breaks (`***` on an empty line), first-paragraph indent suppression.
 - **Focus mode** (`⌘.`) fades the interface away. `⌘\` toggles the sidebar.
@@ -81,11 +83,12 @@ Inside each document:
 
 ```
 meta      LoroMap         { title }
-chapters  LoroMovableList [ LoroMap { id, title } ]   ← the index
-bodies    LoroMap         { [chapterId]: LoroMap }    ← ProseMirror trees
+chapters  LoroMovableList [ LoroMap { id, title } ]   ← manuscript index
+notes     LoroMovableList [ LoroMap { id, title } ]   ← working notes index
+bodies    LoroMap         { [entryId]: LoroMap }    ← ProseMirror trees
 ```
 
-The chapter **index** and the chapter **prose** live in sibling subtrees on
+The section **indexes** and the document **prose** live in sibling subtrees on
 purpose. Loro delivers events for a container's entire subtree, so nesting
 bodies inside the chapter list would wake the sidebar on every keystroke. Split
 this way, typing notifies only `bodies`.
@@ -93,7 +96,7 @@ this way, typing notifies only `bodies`.
 Reordering uses a *movable* list, so two devices dragging chapters around
 converge instead of duplicating or dropping one.
 
-Each editor binds to a single chapter's body container by `ContainerID`. Those
+Each editor binds to a single chapter or note's body container by `ContainerID`. Those
 IDs are identical on every peer, which is what lets a chapter opened on two
 devices resolve to the same CRDT container.
 

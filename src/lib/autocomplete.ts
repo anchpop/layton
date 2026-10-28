@@ -9,7 +9,7 @@ import { schema } from "./schema";
 import { importContentKey } from "./crypto";
 import { handshake, ModelFailed, sealRequest, StreamVerifier, openResult, verifyStatement, VERSION, type ContinuationSession, type KeyStatement } from "./ai-protocol";
 export type { ContinuationSession } from "./ai-protocol";
-import { chapterText, readChapters } from "./book";
+import { chapterText, readEntries } from "./book";
 
 /**
  * "Continue with AI": the one feature where prose leaves the vault's keys.
@@ -118,7 +118,7 @@ export function promptBeforeCursor(
 ): string {
   const parts: string[] = [];
   if (title.trim()) parts.push(title.trim());
-  for (const entry of readChapters(doc)) {
+  for (const entry of readEntries(doc, "chapters")) {
     const heading = entry.title.trim();
     const text =
       entry.id === activeId

@@ -6,11 +6,12 @@ import type { ContainerID } from "loro-crdt";
  *
  *   meta      LoroMap        { title: string }
  *   chapters  LoroMovableList[ LoroMap { id: string, title: string } ]
- *   bodies    LoroMap        { [chapterId]: LoroMap }   <- ProseMirror trees
+ *   notes     LoroMovableList[ LoroMap { id: string, title: string } ]
+ *   bodies    LoroMap        { [entryId]: LoroMap }   <- ProseMirror trees
  *
- * The chapter *index* (order + titles) is deliberately kept in a different
- * subtree from the chapter *prose*. Loro delivers events for a container's
- * whole subtree, so if bodies were nested inside the chapter list every
+ * Each section’s *index* (order + titles) is deliberately kept in a different
+ * subtree from the document *prose*. Loro delivers events for a container's
+ * whole subtree, so if bodies were nested inside an index list every
  * keystroke would wake up the sidebar. Split this way, typing only notifies
  * `bodies` and the sidebar re-renders exactly when the index really changes.
  *
@@ -18,21 +19,27 @@ import type { ContainerID } from "loro-crdt";
  * converge without duplicating or dropping one.
  */
 
-export type ChapterIndexEntry = {
+export type IndexEntry = {
   id: string;
   title: string;
 };
 
+export type Section = "chapters" | "notes";
+
+/** What an untitled entry's title field suggests; `number` counts from 1. */
+export function titlePlaceholder(section: Section, number: number): string {
+  return section === "chapters" ? `Chapter ${number}` : "Untitled note";
+}
+
 const META = "meta";
-const CHAPTERS = "chapters";
 const BODIES = "bodies";
 
 export function metaMap(doc: LoroDoc): LoroMap {
   return doc.getMap(META);
 }
 
-export function chapterList(doc: LoroDoc): LoroMovableList {
-  return doc.getMovableList(CHAPTERS);
+export function sectionList(doc: LoroDoc, section: Section): LoroMovableList {
+  return doc.getMovableList(section);
 }
 
 export function bodiesMap(doc: LoroDoc): LoroMap {
@@ -49,9 +56,9 @@ export function setTitle(doc: LoroDoc, title: string): void {
   doc.commit();
 }
 
-export function readChapters(doc: LoroDoc): ChapterIndexEntry[] {
-  const list = chapterList(doc);
-  const out: ChapterIndexEntry[] = [];
+export function readEntries(doc: LoroDoc, section: Section): IndexEntry[] {
+  const list = sectionList(doc, section);
+  const out: IndexEntry[] = [];
   for (let i = 0; i < list.length; i++) {
     const entry = list.get(i);
     if (!(entry instanceof LoroMap)) continue;
@@ -63,21 +70,24 @@ export function readChapters(doc: LoroDoc): ChapterIndexEntry[] {
   return out;
 }
 
-function findChapterIndex(doc: LoroDoc, chapterId: string): number {
-  const list = chapterList(doc);
-  for (let i = 0; i < list.length; i++) {
-    const entry = list.get(i);
-    if (entry instanceof LoroMap && entry.get("id") === chapterId) return i;
+function findEntry(doc: LoroDoc, id: string) {
+  for (const section of ["chapters", "notes"] as const) {
+    const list = sectionList(doc, section);
+    for (let index = 0; index < list.length; index++) {
+      const entry = list.get(index);
+      if (entry instanceof LoroMap && entry.get("id") === id) return { list, index, entry };
+    }
   }
-  return -1;
+  return null;
 }
 
-export function addChapter(
+export function addEntry(
   doc: LoroDoc,
+  section: Section,
   title = "",
   atIndex?: number,
-): ChapterIndexEntry {
-  const list = chapterList(doc);
+): IndexEntry {
+  const list = sectionList(doc, section);
   const id = crypto.randomUUID();
   const index = atIndex ?? list.length;
   const entry = list.insertContainer(index, new LoroMap());
@@ -90,30 +100,23 @@ export function addChapter(
   return { id, title };
 }
 
-export function renameChapter(
-  doc: LoroDoc,
-  chapterId: string,
-  title: string,
-): void {
-  const i = findChapterIndex(doc, chapterId);
-  if (i < 0) return;
-  const entry = chapterList(doc).get(i);
-  if (entry instanceof LoroMap) {
-    entry.set("title", title);
-    doc.commit();
-  }
-}
-
-export function deleteChapter(doc: LoroDoc, chapterId: string): void {
-  const i = findChapterIndex(doc, chapterId);
-  if (i < 0) return;
-  chapterList(doc).delete(i, 1);
-  bodiesMap(doc).delete(chapterId);
+export function renameEntry(doc: LoroDoc, id: string, title: string): void {
+  const found = findEntry(doc, id);
+  if (!found) return;
+  found.entry.set("title", title);
   doc.commit();
 }
 
-export function moveChapter(doc: LoroDoc, from: number, to: number): void {
-  const list = chapterList(doc);
+export function deleteEntry(doc: LoroDoc, id: string): void {
+  const found = findEntry(doc, id);
+  if (!found) return;
+  found.list.delete(found.index, 1);
+  bodiesMap(doc).delete(id);
+  doc.commit();
+}
+
+export function moveEntry(doc: LoroDoc, section: Section, from: number, to: number): void {
+  const list = sectionList(doc, section);
   if (from === to || from < 0 || to < 0) return;
   if (from >= list.length || to >= list.length) return;
   list.move(from, to);
@@ -121,18 +124,18 @@ export function moveChapter(doc: LoroDoc, from: number, to: number): void {
 }
 
 /**
- * ContainerID of a chapter's ProseMirror tree, creating it if a peer added the
- * chapter to the index without (yet) materialising its body.
+ * ContainerID of an entry's ProseMirror tree, creating it if a peer added the
+ * entry to the index without (yet) materialising its body.
  */
 export function bodyContainerId(
   doc: LoroDoc,
-  chapterId: string,
+  id: string,
 ): ContainerID | null {
-  if (findChapterIndex(doc, chapterId) < 0) return null;
+  if (!findEntry(doc, id)) return null;
   const bodies = bodiesMap(doc);
-  let body = bodies.get(chapterId);
+  let body = bodies.get(id);
   if (!(body instanceof LoroMap)) {
-    body = bodies.setContainer(chapterId, new LoroMap());
+    body = bodies.setContainer(id, new LoroMap());
     doc.commit();
   }
   return (body as LoroMap).id;
@@ -177,7 +180,7 @@ function countWords(node: unknown): number {
 }
 
 export function bookWordCount(doc: LoroDoc): number {
-  return countWords(bodiesMap(doc).toJSON());
+  return readEntries(doc, "chapters").reduce((sum, entry) => sum + chapterWordCount(doc, entry.id), 0);
 }
 
 /**

@@ -53,9 +53,9 @@ export async function loadStory(env: Env, props: McpProps, bookId: string) {
 export async function readStory(env: Env, props: McpProps, bookId: string) {
   const data = await loadStory(env, props, bookId);
   const { renderStory } = await import("./story");
-  const chapters = await renderStory(data.key, data.updates);
+  const { chapters, notes } = await renderStory(data.key, data.updates);
   await checkGrant(env, props);
-  return { id: bookId, title: await unsealText(data.key, data.book.title_cipher), chapters, revision: data.revision };
+  return { id: bookId, title: await unsealText(data.key, data.book.title_cipher), chapters, notes, revision: data.revision };
 }
 
 export async function editStory(env: Env, props: McpProps, args: {
@@ -72,7 +72,7 @@ export async function editStory(env: Env, props: McpProps, args: {
   const receiptSchema = z.object({ revision: z.string(), replayed: z.boolean() });
   const existing = receiptSchema.nullable().parse(await database(env, "rpc/mcp_write", base));
   const output = (receipt: z.infer<typeof receiptSchema>) => ({ storyId: args.storyId, ...receipt,
-    ...(edit.kind === "create_chapter" ? { chapterId: args.operationId } : {}) });
+    ...((edit.kind === "create_chapter" || edit.kind === "create_note") ? { chapterId: args.operationId } : {}) });
   if (existing) return output(existing);
   if (data.revision !== args.expectedRevision) throw new Error("Story changed. Read it again before editing.");
   const { loadStoryDoc, applyStoryEdit } = await import("./story");

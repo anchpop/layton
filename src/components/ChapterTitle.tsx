@@ -2,17 +2,20 @@ import { useLayoutEffect, useRef } from "react";
 import type { LoroDoc } from "loro-crdt";
 
 import { useTitleEdit } from "@/hooks/useTitleEdit";
-import { renameChapter, type ChapterIndexEntry } from "@/lib/book";
+import { renameEntry, titlePlaceholder, type IndexEntry, type Section } from "@/lib/book";
 
 export function ChapterTitle({
   doc,
   chapter,
+  section,
   number,
   autoFocus,
   onEnter,
 }: {
   doc: LoroDoc;
-  chapter: ChapterIndexEntry;
+  chapter: IndexEntry;
+  section: Section;
+  /** Position in its section, for the "Chapter N" placeholder. */
   number: number;
   autoFocus: boolean;
   onEnter: () => void;
@@ -20,7 +23,7 @@ export function ChapterTitle({
   const ref = useRef<HTMLTextAreaElement>(null);
   const edit = useTitleEdit(
     chapter.title,
-    (title) => renameChapter(doc, chapter.id, title),
+    (title) => renameEntry(doc, chapter.id, title),
     { onEnter },
   );
 
@@ -45,8 +48,8 @@ export function ChapterTitle({
         {...edit}
         rows={1}
         autoFocus={autoFocus}
-        aria-label="Chapter title"
-        placeholder={`Chapter ${number}`}
+        aria-label={section === "chapters" ? "Chapter title" : "Note title"}
+        placeholder={titlePlaceholder(section, number)}
       />
     </h1>
   );

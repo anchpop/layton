@@ -9,11 +9,12 @@ import {
 } from "lucide-react";
 import type { LoroDoc } from "loro-crdt";
 
-import type { ChapterIndexEntry } from "@/lib/book";
+import type { IndexEntry, Section } from "@/lib/book";
 import {
-  deleteChapter,
-  moveChapter,
-  renameChapter,
+  deleteEntry,
+  moveEntry,
+  renameEntry,
+  titlePlaceholder,
 } from "@/lib/book";
 import {
   SidebarGroup,
@@ -46,26 +47,29 @@ import { useTitleEdit } from "@/hooks/useTitleEdit";
 
 type Props = {
   doc: LoroDoc;
-  chapters: ChapterIndexEntry[];
+  entries: IndexEntry[];
+  section: Section;
   activeId: string | null;
   onSelect: (id: string) => void;
   onCreate: () => void;
 };
 
-export function ChapterList({ doc, chapters, activeId, onSelect, onCreate }: Props) {
+export function SectionList({ doc, section, entries, activeId, onSelect, onCreate }: Props) {
+  const noun = section === "chapters" ? "chapter" : "note";
+  const label = section === "chapters" ? "Chapters" : "Notes";
   const [editingId, setEditingId] = useState<string | null>(null);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [overIndex, setOverIndex] = useState<number | null>(null);
-  const [pendingDelete, setPendingDelete] = useState<ChapterIndexEntry | null>(
+  const [pendingDelete, setPendingDelete] = useState<IndexEntry | null>(
     null,
   );
-  function startRename(chapter: ChapterIndexEntry) {
-    setEditingId(chapter.id);
+  function startRename(entry: IndexEntry) {
+    setEditingId(entry.id);
   }
 
   function onDrop(target: number) {
     if (dragIndex != null && dragIndex !== target) {
-      moveChapter(doc, dragIndex, target);
+      moveEntry(doc, section, dragIndex, target);
     }
     setDragIndex(null);
     setOverIndex(null);
@@ -73,26 +77,27 @@ export function ChapterList({ doc, chapters, activeId, onSelect, onCreate }: Pro
 
   return (
     <SidebarGroup>
-      <SidebarGroupLabel>Chapters</SidebarGroupLabel>
+      <SidebarGroupLabel>{label}</SidebarGroupLabel>
       <SidebarGroupAction
-        title="New chapter"
+        title={`New ${noun}`}
         onClick={onCreate}
       >
         <Plus />
-        <span className="sr-only">New chapter</span>
+        <span className="sr-only">New {noun}</span>
       </SidebarGroupAction>
 
       <SidebarMenu>
-        {chapters.map((chapter, index) => {
-          const isActive = chapter.id === activeId;
-          const isOver = overIndex === index && dragIndex !== index;
+        {entries.map((entry, index) => {
+          const isActive = entry.id === activeId;
+          const isOver = dragIndex != null && overIndex === index && dragIndex !== index;
 
           return (
             <SidebarMenuItem
-              key={chapter.id}
-              draggable={editingId !== chapter.id}
+              key={entry.id}
+              draggable={editingId !== entry.id}
               onDragStart={() => setDragIndex(index)}
               onDragOver={(e) => {
+                if (dragIndex == null) return;
                 e.preventDefault();
                 setOverIndex(index);
               }}
@@ -111,33 +116,34 @@ export function ChapterList({ doc, chapters, activeId, onSelect, onCreate }: Pro
                 dragIndex === index && "opacity-40",
               )}
             >
-              {editingId === chapter.id ? (
-                <ChapterRename
-                  key={chapter.id}
+              {editingId === entry.id ? (
+                <EntryRename
+                  key={entry.id}
                   doc={doc}
-                  chapter={chapter}
-                  number={index + 1}
+                  entry={entry}
+                  placeholder={titlePlaceholder(section, index + 1)}
+                  noun={noun}
                   onFinish={() => setEditingId(null)}
                 />
               ) : (
                 <>
                   <SidebarMenuButton
                     isActive={isActive}
-                    onClick={() => onSelect(chapter.id)}
-                    onDoubleClick={() => startRename(chapter)}
+                    onClick={() => onSelect(entry.id)}
+                    onDoubleClick={() => startRename(entry)}
                   >
-                    <span className="tabular-nums text-prose-faint">
+                    {section === "chapters" && <span className="tabular-nums text-prose-faint">
                       {index + 1}.
-                    </span>
+                    </span>}
                     <span className="truncate">
-                      {chapter.title || (
+                      {entry.title || (
                         <span className="text-prose-faint">Untitled</span>
                       )}
                     </span>
                   </SidebarMenuButton>
 
-                  {/* Every chapter action lives here, not only behind a
-                      double-click. On a phone the first tap opens the chapter
+                  {/* Every entry action lives here, not only behind a
+                      double-click. On a phone the first tap opens the document
                       and closes the drawer, so a second click never arrives —
                       and dragging to reorder is unavailable on touch and to
                       keyboard users besides. */}
@@ -145,27 +151,27 @@ export function ChapterList({ doc, chapters, activeId, onSelect, onCreate }: Pro
                     <DropdownMenuTrigger asChild>
                       <SidebarMenuAction
                         showOnHover
-                        title={`Actions for ${chapter.title || "this chapter"}`}
+                        title={`Actions for ${entry.title || `this ${noun}`}`}
                       >
                         <MoreHorizontal />
-                        <span className="sr-only">Chapter actions</span>
+                        <span className="sr-only">Actions for this {noun}</span>
                       </SidebarMenuAction>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent side="right" align="start">
-                      <DropdownMenuItem onSelect={() => startRename(chapter)}>
+                      <DropdownMenuItem onSelect={() => startRename(entry)}>
                         <Pencil className="size-4" />
                         Rename
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         disabled={index === 0}
-                        onSelect={() => moveChapter(doc, index, index - 1)}
+                        onSelect={() => moveEntry(doc, section, index, index - 1)}
                       >
                         <ArrowUp className="size-4" />
                         Move up
                       </DropdownMenuItem>
                       <DropdownMenuItem
-                        disabled={index === chapters.length - 1}
-                        onSelect={() => moveChapter(doc, index, index + 1)}
+                        disabled={index === entries.length - 1}
+                        onSelect={() => moveEntry(doc, section, index, index + 1)}
                       >
                         <ArrowDown className="size-4" />
                         Move down
@@ -173,7 +179,7 @@ export function ChapterList({ doc, chapters, activeId, onSelect, onCreate }: Pro
                       <DropdownMenuSeparator />
                       <DropdownMenuItem
                         variant="destructive"
-                        onSelect={() => setPendingDelete(chapter)}
+                        onSelect={() => setPendingDelete(entry)}
                       >
                         <Trash2 className="size-4" />
                         Delete
@@ -186,9 +192,9 @@ export function ChapterList({ doc, chapters, activeId, onSelect, onCreate }: Pro
           );
         })}
 
-        {chapters.length === 0 && (
+        {entries.length === 0 && (
           <li className="px-2 py-3 text-sm text-muted-foreground">
-            No chapters yet.
+            No {section} yet.
           </li>
         )}
       </SidebarMenu>
@@ -203,7 +209,7 @@ export function ChapterList({ doc, chapters, activeId, onSelect, onCreate }: Pro
               Delete “{pendingDelete?.title || "Untitled"}”?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              This removes the chapter and everything written in it, on every
+              This removes the {noun} and everything written in it, on every
               device. It cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -212,11 +218,11 @@ export function ChapterList({ doc, chapters, activeId, onSelect, onCreate }: Pro
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => {
-                if (pendingDelete) deleteChapter(doc, pendingDelete.id);
+                if (pendingDelete) deleteEntry(doc, pendingDelete.id);
                 setPendingDelete(null);
               }}
             >
-              Delete chapter
+              Delete {noun}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -225,22 +231,23 @@ export function ChapterList({ doc, chapters, activeId, onSelect, onCreate }: Pro
   );
 }
 
-function ChapterRename({ doc, chapter, number, onFinish }: {
+function EntryRename({ doc, entry, placeholder, noun, onFinish }: {
   doc: LoroDoc;
-  chapter: ChapterIndexEntry;
-  number: number;
+  entry: IndexEntry;
+  placeholder: string;
+  noun: string;
   onFinish: () => void;
 }) {
   const ref = useRef<HTMLInputElement>(null);
-  const edit = useTitleEdit(chapter.title, (title) => renameChapter(doc, chapter.id, title), { onFinish });
+  const edit = useTitleEdit(entry.title, (title) => renameEntry(doc, entry.id, title), { onFinish });
   useEffect(() => { ref.current?.select(); }, []);
   return (
     <input
       ref={ref}
       {...edit}
       autoFocus
-      aria-label="Rename chapter"
-      placeholder={`Chapter ${number}`}
+      aria-label={`Rename ${noun}`}
+      placeholder={placeholder}
       className="h-8 w-full rounded-md bg-transparent px-2 text-base outline-none ring-1 ring-sidebar-ring can-hover:text-sm"
     />
   );

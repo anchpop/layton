@@ -4,11 +4,12 @@ import type { LoroDoc } from "loro-crdt";
 import { BookSync, type SyncState } from "../lib/sync";
 import { subscribe as subscribeVault } from "../lib/vault";
 import {
-  chapterList,
+  sectionList,
   getTitle,
   metaMap,
-  readChapters,
-  type ChapterIndexEntry,
+  readEntries,
+  type IndexEntry,
+  type Section,
 } from "../lib/book";
 
 /** Creates and owns the sync engine for one book. */
@@ -96,27 +97,27 @@ export function useSyncState(sync: BookSync | null): SyncState {
 }
 
 /**
- * Chapter index, re-read only when the index subtree actually changes.
+ * Section index, re-read only when the index subtree actually changes.
  *
- * This subscribes to the `chapters` container rather than the document, which
+ * This subscribes to the section’s container rather than the document, which
  * is why typing in a chapter does not re-render the sidebar — the prose lives
  * in a sibling subtree (see lib/book.ts).
  */
-export function useChapters(doc: LoroDoc | null): ChapterIndexEntry[] {
-  const [chapters, setChapters] = useState<ChapterIndexEntry[]>([]);
+export function useEntries(doc: LoroDoc | null, section: Section): IndexEntry[] {
+  const [entries, setEntries] = useState<IndexEntry[]>([]);
 
   useEffect(() => {
     if (!doc) {
-      setChapters([]);
+      setEntries([]);
       return;
     }
     // Read once up front: the cached snapshot may have been imported before
     // this effect ran, in which case no event is coming for it.
-    setChapters(readChapters(doc));
-    return chapterList(doc).subscribe(() => setChapters(readChapters(doc)));
-  }, [doc]);
+    setEntries(readEntries(doc, section));
+    return sectionList(doc, section).subscribe(() => setEntries(readEntries(doc, section)));
+  }, [doc, section]);
 
-  return chapters;
+  return entries;
 }
 
 /** Book title, kept live against the `meta` subtree. */

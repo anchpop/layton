@@ -3,9 +3,10 @@ import type { LoroDoc } from "loro-crdt";
 const actions: Record<string, string> = {
   replace_text: "Edited text",
   append_to_chapter: "Appended text",
+  create_note: "Added a note",
   create_chapter: "Added a chapter",
   rename_story: "Renamed the story",
-  rename_chapter: "Renamed a chapter",
+  rename_chapter: "Renamed a chapter or note",
 };
 
 export type McpHistoryEntry = {

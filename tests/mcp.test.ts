@@ -40,3 +40,47 @@ test("body limit applies to chunked input without Content-Length", async () => {
   } });
   await assert.rejects(readJson(new Response(stream), 20), /Body too large/);
 });
+
+
+test("notes have an independent index and stay outside manuscript counts and shares", async () => {
+  const { LoroDoc, LoroMap, LoroList, LoroText } = await import("loro-crdt");
+  const { addEntry, readEntries, moveEntry, renameEntry, deleteEntry, bodyContainerId, bookWordCount, sectionList } = await import("../src/lib/book");
+  const { exportStory } = await import("../src/lib/shareExport");
+  const doc = new LoroDoc();
+  assert.deepEqual(readEntries(doc, "notes"), []);
+  const chapter = addEntry(doc, "chapters", "Opening");
+  const note = addEntry(doc, "notes", "Characters");
+  const other = addEntry(doc, "notes", "Outline");
+  const chapterEvents: unknown[] = [];
+  const stop = sectionList(doc, "chapters").subscribe(event => chapterEvents.push(event));
+  for (const [id, text] of [[chapter.id, "Story words"], [note.id, "Secret worldbuilding never shared"]]) {
+    const body = doc.getMap("bodies").get(id) as InstanceType<typeof LoroMap>;
+    body.set("nodeName", "doc");
+    const paragraph = body.setContainer("children", new LoroList()).pushContainer(new LoroMap());
+    paragraph.set("nodeName", "paragraph");
+    paragraph.setContainer("children", new LoroList()).pushContainer(new LoroText()).insert(0, text);
+  }
+  doc.commit();
+  moveEntry(doc, "notes", 1, 0);
+  renameEntry(doc, note.id, "Cast");
+  assert.deepEqual(readEntries(doc, "notes"), [other, { ...note, title: "Cast" }]);
+  assert.deepEqual(readEntries(doc, "chapters"), [chapter]);
+  assert.ok(bodyContainerId(doc, note.id));
+  assert.equal(bookWordCount(doc), 2);
+  const share = exportStory(doc);
+  assert.equal(share.chapters.length, 1);
+  assert.doesNotMatch(JSON.stringify(share), /Secret|worldbuilding|Cast|Outline/);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(chapterEvents.length, 0);
+  deleteEntry(doc, chapter.id);
+  assert.equal(bookWordCount(doc), 0);
+  assert.deepEqual(exportStory(doc).chapters, []);
+  chapterEvents.length = 0;
+  deleteEntry(doc, note.id);
+  assert.equal(bodyContainerId(doc, note.id), null);
+  assert.equal(doc.getMap("bodies").get(note.id), undefined);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  // Deleting a note never changes the chapter index.
+  assert.equal(chapterEvents.length, 0);
+  stop(); doc.free();
+});
