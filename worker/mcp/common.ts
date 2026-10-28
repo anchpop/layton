@@ -12,6 +12,15 @@ export const propsSchema = keysSchema.extend({
 }).refine(p => p.includePrivate === (p.privateKey !== undefined));
 export type McpProps = z.infer<typeof propsSchema>;
 
+/**
+ * The grant itself says no: expired, revoked, or narrower than these tokens.
+ * Only this may end a connection. Anything else (a timeout, a database blip)
+ * is worth retrying, and reporting it as revoked makes the app sign out.
+ */
+export class GrantRevoked extends Error {
+  constructor(message = "Connection expired or revoked. Reconnect Layton.") { super(message); }
+}
+
 export function json(body: unknown, status = 200): Response {
   return Response.json(body, { status, headers: { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
 }
@@ -45,7 +54,7 @@ export async function database(env: Env, path: string, body: unknown, bearer?: s
     body: JSON.stringify(body), signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok) {
-    if (response.status === 401 || response.status === 403) throw new Error("Connection expired or revoked. Reconnect Layton.");
+    if (response.status === 401 || response.status === 403) throw new GrantRevoked();
     const detail = z.object({ code: z.string().optional() }).safeParse(await readJson(response));
     if (detail.success && detail.data.code === "40001") throw new Error("Story changed. Read it again before editing.");
     if (detail.success && detail.data.code === "23505") throw new Error("Operation ID already used with different input. Use a new ID for a new edit.");
@@ -62,6 +71,6 @@ export function grantRead(env: Env, props: McpProps, operation: string, args: Re
 
 export async function checkGrant(env: Env, props: McpProps) {
   const grant = z.object({ owner_id: z.uuid(), include_private: z.boolean(), can_edit: z.boolean().optional() }).parse(await grantRead(env, props, "check"));
-  if (props.canEdit && !grant.can_edit) throw new Error("Editing requires a new connection with edit access.");
-  if (grant.owner_id !== props.userId || grant.include_private !== props.includePrivate) throw new Error("Connection expired or revoked. Reconnect Layton.");
+  if (props.canEdit && !grant.can_edit) throw new GrantRevoked("Editing requires a new connection with edit access.");
+  if (grant.owner_id !== props.userId || grant.include_private !== props.includePrivate) throw new GrantRevoked();
 }

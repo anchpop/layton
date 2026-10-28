@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
 import { editStory, listStories, readStory } from "./books";
-import { checkGrant, json, propsSchema, readJson, type McpProps } from "./common";
+import { checkGrant, GrantRevoked, json, propsSchema, readJson, type McpProps } from "./common";
 
 const annotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 function result(value: unknown) { return { content: [{ type: "text" as const, text: JSON.stringify(value) }] }; }
@@ -20,7 +20,10 @@ export async function mcp(request: Request, env: Env, rawProps: unknown): Promis
   const parsed = propsSchema.safeParse(rawProps);
   if (!parsed.success) return json({ error: "Invalid connection" }, 401);
   const props: McpProps = parsed.data;
-  try { await checkGrant(env, props); } catch { return json({ error: "Connection expired or revoked. Reconnect Layton." }, 401); }
+  try { await checkGrant(env, props); } catch (error) {
+    if (error instanceof GrantRevoked) return json({ error: "Connection expired or revoked. Reconnect Layton." }, 401);
+    return json({ error: "Layton is briefly unavailable. Try again shortly." }, 503);
+  }
   if (request.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST", "Cache-Control": "no-store" } });
   const body = await readJson(request, 512 * 1024);
   const server = new McpServer({ name: "layton", version: "1.1.1" }, {

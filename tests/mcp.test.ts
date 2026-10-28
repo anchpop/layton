@@ -4,7 +4,7 @@ import { randomKeyBytes, randomSalt, deriveMasterKey, importContentKey, seal, se
 import { bytesToBase64 } from "../src/lib/bytes";
 import { delegateMcpKeys } from "../src/lib/mcpKeys";
 import { openBookKey, type Book } from "../worker/mcp/books";
-import { readJson, propsSchema } from "../worker/mcp/common";
+import { readJson, propsSchema, checkGrant, GrantRevoked } from "../worker/mcp/common";
 
 test("ordinary consent never unwraps or sends a private key, even if its envelope is invalid", async () => {
   const salt = randomSalt();
@@ -41,6 +41,18 @@ test("body limit applies to chunked input without Content-Length", async () => {
   await assert.rejects(readJson(new Response(stream), 20), /Body too large/);
 });
 
+test("only the database refusing a grant counts as revoked; outages stay retryable", async (t) => {
+  const env = { SUPABASE_URL: "https://db.invalid", SUPABASE_PUBLISHABLE_KEY: "key" } as Env;
+  const props = { userId: crypto.randomUUID(), connectionId: crypto.randomUUID(), secret: "a".repeat(64),
+    everydayKey: bytesToBase64(randomKeyBytes()), includePrivate: false, scope: "stories:read" as const };
+  const answer = (response: () => Response) => t.mock.method(globalThis, "fetch", async () => response());
+  answer(() => Response.json({ message: "Connection expired or revoked" }, { status: 403 }));
+  await assert.rejects(checkGrant(env, props), GrantRevoked);
+  answer(() => Response.json({ owner_id: crypto.randomUUID(), include_private: false }));
+  await assert.rejects(checkGrant(env, props), GrantRevoked, "another owner's grant");
+  answer(() => Response.json({ message: "upstream timeout" }, { status: 504 }));
+  await assert.rejects(checkGrant(env, props), (error) => !(error instanceof GrantRevoked));
+});
 
 test("notes have an independent index and stay outside manuscript counts and shares", async () => {
   const { LoroDoc, LoroMap, LoroList, LoroText } = await import("loro-crdt");

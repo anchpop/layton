@@ -2,7 +2,7 @@ import { OAuthProvider, OAuthError } from "@cloudflare/workers-oauth-provider";
 import relay from "./relay";
 import { authorization } from "./mcp/authorization";
 import { mcp } from "./mcp/server";
-import { checkGrant, propsSchema, json, READ_SCOPE, WRITE_SCOPE, type McpEnv } from "./mcp/common";
+import { checkGrant, GrantRevoked, propsSchema, json, READ_SCOPE, WRITE_SCOPE, type McpEnv } from "./mcp/common";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -47,8 +47,13 @@ export default {
         if (!requestedScope.includes(READ_SCOPE)) throw new OAuthError("invalid_scope", { description: "stories:read is required" });
         const parsed = propsSchema.safeParse(props);
         if (!parsed.success) throw new OAuthError("invalid_grant", { description: "Reconnect Layton" });
+        // invalid_grant makes the app discard its refresh token for good, so it
+        // is reserved for a grant that really is gone; a blip asks for a retry.
         try { await checkGrant(env, parsed.data); }
-        catch { throw new OAuthError("invalid_grant", { description: "Connection expired or revoked. Reconnect Layton." }); }
+        catch (error) {
+          if (error instanceof GrantRevoked) throw new OAuthError("invalid_grant", { description: "Connection expired or revoked. Reconnect Layton." });
+          throw new OAuthError("temporarily_unavailable", { description: "Try again shortly.", statusCode: 503, headers: { "Retry-After": "30" } });
+        }
         return { accessTokenProps: { ...parsed.data, canEdit: !!parsed.data.canEdit && requestedScope.includes(WRITE_SCOPE) } };
       },
       accessTokenTTL: 900, refreshTokenTTL: 366 * 24 * 60 * 60, clientRegistrationTTL: 400 * 24 * 60 * 60,
